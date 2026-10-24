@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en" data-theme="{{ cfg.theme.as_str() }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{{ cfg.title }}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c6cf2'/%3E%3Cpath d='M9 15l7-6 7 6v8H9z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<main>
+<header>
+  <h1>{{ cfg.title }}</h1>
+  {% for w in cfg.widgets %}
+    {% match w %}
+    {% when Widget::Clock %}
+      <div class="w-clock"><time id="time"></time><span id="date"></span></div>
+    {% when Widget::Search %}
+      <form class="w-search" id="search" role="search" data-tpl="{{ cfg.search_template() }}">
+        <input name="q" type="search" placeholder="Search the web" aria-label="Search the web" autocomplete="off" spellcheck="false">
+        <kbd aria-hidden="true">/</kbd>
+      </form>
+    {% when Widget::Resources %}
+      <div class="w-resources" aria-label="System resources">
+        <div class="stat"><span class="label">CPU</span><b data-r="cpu">–</b><span class="bar"><i data-bar="cpu"></i></span></div>
+        <div class="stat"><span class="label">Memory</span><b data-r="mem">–</b><span class="bar"><i data-bar="mem"></i></span></div>
+        <div class="stat"><span class="label">Disk</span><b data-r="disk">–</b><span class="bar"><i data-bar="disk"></i></span></div>
+        <div class="stat"><span class="label">Uptime</span><b data-r="uptime">–</b></div>
+      </div>
+    {% endmatch %}
+  {% endfor %}
+</header>
+
+{% if let Some(e) = error %}
+<div class="error" role="alert"><strong>Config error, still serving the last valid config</strong><pre>{{ e }}</pre></div>
+{% endif %}
+
+{% if cfg.groups.is_empty() && cfg.bookmarks.is_empty() %}
+<p class="empty">Nothing here yet. Add <code>groups</code> or <code>bookmarks</code> to your config, this page reloads it automatically.</p>
+{% endif %}
+
+{% if !cfg.groups.is_empty() %}
+<div class="groups">
+{% for g in cfg.groups %}
+  <section>
+    <h2>{{ g.name }}</h2>
+    <div class="services">
+    {% for s in g.services %}
+      {% if let Some(url) = s.url %}<a class="card" href="{{ url }}">{% else %}<div class="card">{% endif %}
+        {% if let Some(src) = s.icon_src() %}<img src="{{ src }}" alt="" loading="lazy">{% endif %}
+        <div class="text">
+          <div class="name">{{ s.name }}</div>
+          {% if let Some(d) = s.description %}<div class="desc">{{ d }}</div>{% endif %}
+        </div>
+        {% if let Some(c) = s.check %}<span class="status" data-check="{{ c }}" title="Checking…"><span class="ms"></span><span class="dot"></span></span>{% endif %}
+      {% if s.url.is_some() %}</a>{% else %}</div>{% endif %}
+    {% endfor %}
+    </div>
+  </section>
+{% endfor %}
+</div>
+{% endif %}
+
+{% for b in cfg.bookmarks %}
+  <section class="bookmarks">
+    <h2>{{ b.name }}</h2>
+    <div class="links">
+    {% for l in b.links %}
+      <a class="card" href="{{ l.url }}">{% if let Some(src) = l.icon_src() %}<img src="{{ src }}" alt="" loading="lazy">{% endif %}<span>{{ l.name }}</span></a>
+    {% endfor %}
+    </div>
+  </section>
+{% endfor %}
+</main>
+</body>
+</html>

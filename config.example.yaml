@@ -1,0 +1,40 @@
+title: Homelab
+theme: auto          # auto | light | dark
+accent: "#7c6cf2"
+search: duckduckgo   # duckduckgo | google | bing | startpage | https://searx.lan/search?q={q}
+check_interval: 30   # seconds
+widgets: [clock, search, resources]
+
+groups:
+  - name: Media
+    services:
+      - name: Jellyfin
+        url: https://jellyfin.lan
+        icon: jellyfin
+        description: Films & séries
+        check: https://jellyfin.lan/health
+      - name: Immich
+        url: https://photos.lan
+        icon: immich
+        check: tcp://photos.lan:2283
+  - name: Infra
+    services:
+      - name: Proxmox
+        url: https://pve.lan:8006
+        icon: proxmox
+        description: Hyperviseur
+        check: tcp://pve.lan:8006
+      - name: Homepage
+        url: http://localhost:3000
+        icon: homepage
+        check: http://localhost:3000/healthz
+
+bookmarks:
+  - name: Dev
+    links:
+      - name: GitHub
+        url: https://github.com
+        icon: github
+      - name: Docs Rust
+        url: https://doc.rust-lang.org/std/
+        icon: rust
