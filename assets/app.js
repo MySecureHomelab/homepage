@@ -95,6 +95,98 @@ function render({ status, widgets, resources: r }) {
   }
 }
 
+// Ctrl/Cmd+K: fuzzy jump to any service or bookmark on the page, or search the web.
+function startPalette() {
+  const dialog = document.getElementById('palette');
+  const input = document.getElementById('palette-q');
+  const list = document.getElementById('palette-list');
+  const items = [...$$('main a.card')].map((a) => ({
+    name: (a.querySelector('.name') ?? a).textContent.trim(),
+    detail: a.closest('section')?.querySelector('h2')?.textContent.trim() ?? '',
+    href: a.href,
+    icon: a.querySelector('img')?.src,
+  }));
+  let results = [];
+  let active = 0;
+
+  // Higher is better; 0 means no match.
+  const score = (text, q) => {
+    const t = text.toLowerCase();
+    if (t.startsWith(q)) return 4;
+    if (t.split(/[\s\-_.]+/).some((w) => w.startsWith(q))) return 3;
+    if (t.includes(q)) return 2;
+    let i = 0;
+    for (const c of t) if (c === q[i]) i++;
+    return i === q.length ? 1 : 0;
+  };
+
+  function select(i) {
+    active = i;
+    [...list.children].forEach((li, j) => li.setAttribute('aria-selected', String(j === i)));
+    input.setAttribute('aria-activedescendant', results.length ? `palette-${i}` : '');
+    list.children[i]?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function open(r, newTab) {
+    if (!r) return;
+    dialog.close();
+    if (newTab) window.open(r.href, '_blank', 'noopener');
+    else location.href = r.href;
+  }
+
+  function update() {
+    const raw = input.value.trim();
+    const q = raw.toLowerCase();
+    results = items
+      .map((it) => ({ ...it, s: q ? Math.max(score(it.name, q), score(it.detail, q) / 2) : 1 }))
+      .filter((it) => it.s > 0)
+      .sort((a, b) => b.s - a.s)
+      .slice(0, 8);
+    if (raw) {
+      const href = dialog.dataset.tpl.replace('{q}', encodeURIComponent(raw));
+      results.push({ name: `Search the web for “${raw}”`, detail: 'Web', href });
+    }
+    list.replaceChildren(...results.map((r, i) => {
+      const li = el('li');
+      li.id = `palette-${i}`;
+      li.setAttribute('role', 'option');
+      if (r.icon) {
+        const img = el('img');
+        img.src = r.icon;
+        img.alt = '';
+        li.append(img);
+      }
+      li.append(el('span', 'name', r.name), el('span', 'detail', r.detail));
+      li.addEventListener('mousemove', () => { if (active !== i) select(i); });
+      li.addEventListener('click', (e) => open(r, e.metaKey || e.ctrlKey));
+      return li;
+    }));
+    select(0);
+  }
+
+  input.addEventListener('input', update);
+  input.addEventListener('keydown', (e) => {
+    const n = results.length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (n) select((active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      open(results[active], e.metaKey || e.ctrlKey);
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey)) return;
+    e.preventDefault();
+    if (dialog.open) return dialog.close();
+    input.value = '';
+    update();
+    dialog.showModal();
+  });
+  // A click on the backdrop lands on the dialog itself; its content covers the rest.
+  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+}
+
 async function refresh() {
   try {
     const res = await fetch('api/state', { cache: 'no-store' });
@@ -107,5 +199,6 @@ async function refresh() {
 $$('img').forEach(dropBroken);
 startClock();
 startSearch();
+startPalette();
 refresh();
 setInterval(refresh, 5000);

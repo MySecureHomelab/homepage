@@ -16,6 +16,7 @@ Ouvre http://localhost:3000.
 - `HOMEPAGE_ADDR` : adresse d'écoute (`0.0.0.0:3000` par défaut).
 - La config est rechargée à chaud. Si une modif est invalide, l'erreur s'affiche dans la page (avec la ligne fautive) et la dernière config valide reste servie. Les services ajoutés sont vérifiés tout de suite.
 - `/` place le curseur dans la recherche, `Échap` l'en sort.
+- `Ctrl+K` (ou `⌘K`) ouvre la palette : recherche floue dans les services et bookmarks, `Entrée` pour ouvrir, `Ctrl+Entrée` pour un nouvel onglet, et recherche web si rien ne correspond.
 
 ## Docker
 

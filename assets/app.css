@@ -121,3 +121,25 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* Command palette (Ctrl/Cmd+K) */
+#palette {
+  width: min(560px, calc(100% - 32px)); margin: 12vh auto 0; padding: 0;
+  border: 1px solid var(--border); border-radius: 14px;
+  background: var(--card); color: var(--fg); box-shadow: 0 24px 64px rgb(0 0 0 / .35);
+}
+#palette::backdrop { background: rgb(0 0 0 / .45); }
+#palette input {
+  width: 100%; padding: 16px 18px; border: 0; border-bottom: 1px solid var(--border);
+  background: transparent; color: inherit; font: inherit; font-size: 16px; outline: none;
+}
+#palette input::placeholder { color: var(--muted); }
+#palette ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
+#palette ul:empty { display: none; }
+#palette li { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; cursor: pointer; }
+#palette li[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+#palette li img { width: 20px; height: 20px; object-fit: contain; flex: none; }
+#palette .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#palette .detail { color: var(--muted); font-size: 12px; flex: none; }
+#palette footer { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+#palette kbd { padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; font: 11px ui-monospace, monospace; }

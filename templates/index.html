@@ -86,5 +86,11 @@
   </section>
 {% endfor %}
 </main>
+<dialog id="palette" aria-label="Command palette" data-tpl="{{ cfg.search_template() }}">
+  <input id="palette-q" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list"
+         placeholder="Jump to a service or bookmark, or search the web" autocomplete="off" spellcheck="false">
+  <ul id="palette-list" role="listbox" aria-label="Results"></ul>
+  <footer><kbd>↑</kbd><kbd>↓</kbd> navigate <kbd>↵</kbd> open <kbd>Ctrl</kbd><kbd>↵</kbd> new tab <kbd>Esc</kbd> close</footer>
+</dialog>
 </body>
 </html>
