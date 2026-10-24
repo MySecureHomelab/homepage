@@ -37,13 +37,13 @@
 <div class="error" role="alert"><strong>Config error, still serving the last valid config</strong><pre>{{ e }}</pre></div>
 {% endif %}
 
-{% if cfg.groups.is_empty() && cfg.bookmarks.is_empty() %}
+{% if groups.is_empty() && cfg.bookmarks.is_empty() %}
 <p class="empty">Nothing here yet. Add <code>groups</code> or <code>bookmarks</code> to your config, this page reloads it automatically.</p>
 {% endif %}
 
-{% if !cfg.groups.is_empty() %}
+{% if !groups.is_empty() %}
 <div class="groups">
-{% for g in cfg.groups %}
+{% for g in groups %}
   <section>
     <h2>{{ g.name }}</h2>
     <div class="services">

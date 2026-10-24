@@ -12,8 +12,9 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Serialize)]
 pub struct Status {
-    up: bool,
-    ms: u64,
+    pub up: bool,
+    /// Response time; `None` for checks that don't measure one (`docker://`).
+    pub ms: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -41,7 +42,7 @@ async fn check(client: reqwest::Client, target: String) -> (String, Status) {
             .is_ok_and(|r| !r.status().is_server_error()),
     };
     let ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-    (target, Status { up, ms })
+    (target, Status { up, ms: Some(ms) })
 }
 
 pub async fn run_checks(state: web::Data<State>) {
@@ -51,7 +52,14 @@ pub async fn run_checks(state: web::Data<State>) {
         .expect("http client");
     loop {
         let (cfg, _) = state.config();
-        let targets: HashSet<String> = cfg.checks().map(String::from).collect();
+        // docker:// states come straight from discovery, see `api_state`.
+        let targets: HashSet<String> = state
+            .groups(&cfg)
+            .iter()
+            .flat_map(|g| &g.services)
+            .filter_map(|s| s.check.clone())
+            .filter(|c| !c.starts_with("docker://"))
+            .collect();
         // Forget services removed from the config, then publish each result as it lands
         // so one slow host doesn't hold back the others.
         state
@@ -71,7 +79,7 @@ pub async fn run_checks(state: web::Data<State>) {
         // Sleep until the next tick, or until a config reload asks for a fresh round.
         let _ = time::timeout(
             Duration::from_secs(cfg.check_interval),
-            state.reloaded.notified(),
+            state.targets_changed.notified(),
         )
         .await;
     }

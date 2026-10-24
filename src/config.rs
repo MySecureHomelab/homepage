@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +22,12 @@ pub struct Config {
     pub groups: Vec<Group>,
     #[serde(default)]
     pub bookmarks: Vec<BookmarkGroup>,
+    /// Docker hosts to discover services from, by name: `unix:///var/run/docker.sock` or `tcp://host:2375`.
+    #[serde(default)]
+    pub docker: BTreeMap<String, String>,
+    /// Discover services from Kubernetes Ingresses (in-cluster config or `~/.kube/config`).
+    #[serde(default)]
+    pub kubernetes: bool,
 }
 
 #[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq)]
@@ -51,7 +57,7 @@ pub enum Widget {
     Resources,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Group {
     pub name: String,
@@ -59,14 +65,15 @@ pub struct Group {
     pub services: Vec<Service>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Service {
     pub name: String,
     pub url: Option<String>,
     pub icon: Option<String>,
     pub description: Option<String>,
-    /// `http(s)://…` (up if the server answers without a 5xx) or `tcp://host:port`.
+    /// `http(s)://…` (up if the server answers without a 5xx), `tcp://host:port`,
+    /// or `docker://<docker host name>/<container>` (up if running and not unhealthy).
     pub check: Option<String>,
 }
 
@@ -134,11 +141,17 @@ impl Config {
         }
     }
 
-    pub fn checks(&self) -> impl Iterator<Item = &str> {
-        self.groups
-            .iter()
-            .flat_map(|g| &g.services)
-            .filter_map(|s| s.check.as_deref())
+    pub fn valid_check(&self, check: &str) -> bool {
+        check.starts_with("http://")
+            || check.starts_with("https://")
+            || check.strip_prefix("tcp://").is_some_and(|a| {
+                a.rsplit_once(':')
+                    .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
+            })
+            || check
+                .strip_prefix("docker://")
+                .and_then(|r| r.split_once('/'))
+                .is_some_and(|(host, name)| self.docker.contains_key(host) && !name.is_empty())
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -160,18 +173,22 @@ impl Config {
         if self.check_interval == 0 {
             return Err("check_interval: must be at least 1 second".into());
         }
+        for (name, endpoint) in &self.docker {
+            let scheme_ok = ["unix://", "tcp://", "http://"]
+                .iter()
+                .any(|p| endpoint.starts_with(p));
+            if name.is_empty() || name.contains('/') || !scheme_ok {
+                return Err(format!(
+                    "docker.{name}: expected a name without '/' and an endpoint like unix:///var/run/docker.sock or tcp://host:2375, got {endpoint:?}"
+                ));
+            }
+        }
         for (gi, g) in self.groups.iter().enumerate() {
             for (si, s) in g.services.iter().enumerate() {
                 let Some(c) = &s.check else { continue };
-                let ok = c.starts_with("http://")
-                    || c.starts_with("https://")
-                    || c.strip_prefix("tcp://").is_some_and(|a| {
-                        a.rsplit_once(':')
-                            .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
-                    });
-                if !ok {
+                if !self.valid_check(c) {
                     return Err(format!(
-                        "groups[{gi}].services[{si}] ({}): check must be http(s)://… or tcp://host:port, got {c:?}",
+                        "groups[{gi}].services[{si}] ({}): check must be http(s)://…, tcp://host:port or docker://<docker host>/<container>, got {c:?}",
                         s.name
                     ));
                 }
@@ -220,5 +237,19 @@ mod tests {
         let bad_check = "groups: [{name: a, services: [{name: b, check: 'tcp://host'}]}]";
         assert!(parse(bad_check).unwrap_err().contains("services[0] (b)"));
         assert!(parse("search: https://s.lan/?q={q}").is_ok());
+        let unknown_host =
+            "groups: [{name: a, services: [{name: b, check: 'docker://nas/jellyfin'}]}]";
+        assert!(parse(unknown_host).is_err());
+        assert!(
+            parse(&format!(
+                "docker: {{nas: 'tcp://nas:2375'}}\n{unknown_host}"
+            ))
+            .is_ok()
+        );
+        assert!(
+            parse("docker: {nas: 'nas:2375'}")
+                .unwrap_err()
+                .contains("docker.nas")
+        );
     }
 }

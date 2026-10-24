@@ -60,8 +60,9 @@ function render({ status, resources: r }) {
     const s = status[el.dataset.check];
     el.classList.toggle('up', !!s?.up);
     el.classList.toggle('down', !!s && !s.up);
-    el.querySelector('.ms').textContent = s?.up ? `${s.ms} ms` : '';
-    el.title = !s ? 'Checking…' : s.up ? `Up, ${s.ms} ms` : 'Down';
+    const ms = s?.up && s.ms != null ? `${s.ms} ms` : '';
+    el.querySelector('.ms').textContent = ms;
+    el.title = !s ? 'Checking…' : s.up ? (ms ? `Up, ${ms}` : 'Up') : 'Down';
   });
   if (r) {
     setStat('cpu', `${r.cpu.toFixed(0)}%`, r.cpu / 100);

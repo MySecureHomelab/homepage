@@ -38,3 +38,9 @@ bookmarks:
       - name: Docs Rust
         url: https://doc.rust-lang.org/std/
         icon: rust
+
+# Discovery: services come from container labels / Ingress annotations (same names as gethomepage.dev).
+# docker:
+#   local: unix:///var/run/docker.sock
+#   nas: tcp://nas.lan:2375          # e.g. through a docker-socket-proxy
+# kubernetes: true                   # in-cluster, or ~/.kube/config

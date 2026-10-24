@@ -1,11 +1,12 @@
 mod config;
+mod discovery;
 mod monitor;
 
 use actix_web::{
     App, HttpResponse, HttpServer, Responder, get, http::header, middleware::DefaultHeaders, web,
 };
 use askama::Template;
-use config::{Config, Widget};
+use config::{Config, Group, Widget};
 use monitor::{Resources, Status};
 use serde::Serialize;
 use std::{
@@ -26,8 +27,13 @@ const CSP: &str = "default-src 'self'; img-src * data:; base-uri 'none'; form-ac
 pub struct State {
     path: PathBuf,
     loaded: RwLock<Loaded>,
-    /// Wakes the status checker so services added on reload are checked right away.
-    pub reloaded: Notify,
+    /// Wakes discovery when the config changed.
+    pub config_changed: Notify,
+    /// Wakes the status checker so new services are checked right away.
+    pub targets_changed: Notify,
+    pub discovered: RwLock<Vec<discovery::Found>>,
+    /// `docker://host/container` → running and not unhealthy.
+    pub containers: RwLock<HashMap<String, bool>>,
     pub status: RwLock<HashMap<String, Status>>,
     pub resources: RwLock<Option<Resources>>,
 }
@@ -61,7 +67,8 @@ impl State {
                     eprintln!("config reloaded");
                     l.cfg = Arc::new(cfg);
                     l.error = None;
-                    self.reloaded.notify_one();
+                    self.config_changed.notify_one();
+                    self.targets_changed.notify_one();
                 }
                 Err(e) => {
                     eprintln!("config reload failed, keeping previous:\n{e}");
@@ -71,19 +78,32 @@ impl State {
         }
         (l.cfg.clone(), l.error.clone())
     }
+
+    /// Config groups with discovered services merged in.
+    pub(crate) fn groups(&self, cfg: &Config) -> Vec<Group> {
+        discovery::merge(&cfg.groups, &self.discovered.read().unwrap())
+    }
 }
 
 #[derive(Template)]
 #[template(path = "index.html")]
 struct Index<'a> {
     cfg: &'a Config,
+    groups: Vec<Group>,
     error: Option<String>,
 }
 
 #[get("/")]
 async fn index(state: web::Data<State>) -> impl Responder {
     let (cfg, error) = state.config();
-    match (Index { cfg: &cfg, error }).render() {
+    let groups = state.groups(&cfg);
+    match (Index {
+        cfg: &cfg,
+        groups,
+        error,
+    })
+    .render()
+    {
         Ok(html) => HttpResponse::Ok()
             .content_type("text/html; charset=utf-8")
             .body(html),
@@ -117,8 +137,19 @@ struct Snapshot {
 
 #[get("/api/state")]
 async fn api_state(state: web::Data<State>) -> impl Responder {
+    let mut status = state.status.read().unwrap().clone();
+    // A container that is missing, or on a host that stopped answering, counts as down.
+    let containers = state.containers.read().unwrap();
+    for g in state.groups(&state.config().0) {
+        for target in g.services.into_iter().filter_map(|s| s.check) {
+            if target.starts_with("docker://") {
+                let up = containers.get(&target).copied().unwrap_or(false);
+                status.insert(target, Status { up, ms: None });
+            }
+        }
+    }
     web::Json(Snapshot {
-        status: state.status.read().unwrap().clone(),
+        status,
         resources: state.resources.read().unwrap().clone(),
     })
 }
@@ -148,10 +179,14 @@ async fn main() -> std::io::Result<()> {
             error: None,
         }),
         path,
-        reloaded: Notify::new(),
+        config_changed: Notify::new(),
+        targets_changed: Notify::new(),
+        discovered: RwLock::default(),
+        containers: RwLock::default(),
         status: RwLock::default(),
         resources: RwLock::default(),
     });
+    actix_web::rt::spawn(discovery::run(state.clone()));
     actix_web::rt::spawn(monitor::run_checks(state.clone()));
     actix_web::rt::spawn(monitor::run_resources(state.clone()));
 
