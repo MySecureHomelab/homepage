@@ -1,0 +1,173 @@
+# Download clients (torrent, usenet, direct download).
+# Each entry: needs (required options), headers, optional login, named requests,
+# and fields computed with jq over {"<request name>": <response>}. See src/widgets.rs.
+
+qbittorrent:
+  headers:
+    Authorization: "Bearer {key}"
+    Cookie: "{token}"
+  login:
+    path: /api/v2/auth/login
+    method: POST
+    form: { username: "{username}", password: "{password}" }
+    cookie: "*SID*"     # SID (v4) or QBT_SID_<port> (v5)
+  requests:
+    torrents: /api/v2/torrents/info
+  fields:
+    - { label: Leech, value: "[.torrents[] | select(.progress != 1)] | length" }
+    - { label: Download, value: "[.torrents[].dlspeed] | add // 0", format: rate }
+    - { label: Seed, value: "[.torrents[] | select(.progress == 1)] | length" }
+    - { label: Upload, value: "[.torrents[].upspeed] | add // 0", format: rate }
+
+transmission:
+  headers:
+    Authorization: "Basic {basic}"
+    X-Transmission-Session-Id: "{token}"
+  login: { path: /transmission/rpc, method: POST, header: X-Transmission-Session-Id }
+  requests:
+    torrents:
+      path: /transmission/rpc
+      method: POST
+      json: { method: torrent-get, arguments: { fields: [percentDone, status, rateDownload, rateUpload] } }
+  fields:
+    - { label: Leech, value: "[.torrents.arguments.torrents[]? | select(.percentDone != 1)] | length" }
+    - { label: Download, value: "[.torrents.arguments.torrents[]?.rateDownload] | add // 0", format: rate }
+    - { label: Seed, value: "[.torrents.arguments.torrents[]? | select(.percentDone == 1)] | length" }
+    - { label: Upload, value: "[.torrents.arguments.torrents[]?.rateUpload] | add // 0", format: rate }
+
+deluge:
+  needs: [password]
+  headers: { Cookie: "{token}" }
+  login:
+    path: /json
+    method: POST
+    json: { method: auth.login, params: ["{password}"], id: 1 }
+    cookie: _session_id
+    expired: ".error.code? == 1"
+  requests:
+    torrents:
+      path: /json
+      method: POST
+      json:
+        method: web.update_ui
+        params:
+          - [queue, name, total_wanted, state, progress, download_payload_rate, upload_payload_rate, total_remaining, eta]
+          - {}
+        id: 1
+  fields:
+    - { label: Leech, value: "[(.torrents.result.torrents // {})[] | select(.total_remaining != 0)] | length" }
+    - { label: Download, value: "[(.torrents.result.torrents // {})[].download_payload_rate] | add // 0", format: rate }
+    - { label: Seed, value: "[(.torrents.result.torrents // {})[] | select(.total_remaining == 0)] | length" }
+    - { label: Upload, value: "[(.torrents.result.torrents // {})[].upload_payload_rate] | add // 0", format: rate }
+
+# Rows of the httprpc "list" answer are arrays: 3 = state, 11 = up rate, 12 = down rate.
+rutorrent:
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    list:
+      path: /plugins/httprpc/action.php
+      method: POST
+      form: { mode: list }
+  fields:
+    - { label: Active, value: "[(.list.t // {})[] | select((.[3] | tostring) == \"1\")] | length" }
+    - { label: Upload, value: "[(.list.t // {})[] | (.[11] | tonumber? // 0)] | add // 0", format: rate }
+    - { label: Download, value: "[(.list.t // {})[] | (.[12] | tonumber? // 0)] | add // 0", format: rate }
+
+# Without username/password the login is skipped (no-auth mode).
+flood:
+  headers: { Cookie: "{token}" }
+  login:
+    path: /api/auth/authenticate
+    method: POST
+    json: { username: "{username}", password: "{password}" }
+    cookie: jwt
+  requests:
+    torrents: /api/torrents
+  fields:
+    - { label: Leech, value: "[(.torrents.torrents // {})[] | select(.status | index(\"downloading\"))] | length" }
+    - { label: Download, value: "[(.torrents.torrents // {})[].downRate] | add // 0", format: rate }
+    - { label: Seed, value: "[(.torrents.torrents // {})[] | select(.status | index(\"complete\"))] | length" }
+    - { label: Upload, value: "[(.torrents.torrents // {})[].upRate] | add // 0", format: rate }
+
+nzbget:
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    status:
+      path: /jsonrpc
+      method: POST
+      json: { jsonrpc: "2.0", method: status, params: [], id: 1 }
+  fields:
+    - { label: Rate, value: .status.result.DownloadRate, format: rate }
+    - { label: Remaining, value: ".status.result.RemainingSizeMB * 1048576", format: bytes }
+    - { label: Downloaded, value: ".status.result.DownloadedSizeMB * 1048576", format: bytes }
+
+# kbpersec is the same speed as the human readable `speed`, in KiB/s.
+sabnzbd:
+  needs: [key]
+  requests:
+    queue: "/api/?apikey={key}&output=json&mode=queue"
+  fields:
+    - { label: Rate, value: ".queue.queue.kbpersec | tonumber * 1024", format: rate }
+    - { label: Queue, value: .queue.queue.noofslots }
+    - { label: Time Left, value: .queue.queue.timeleft, format: text }
+
+# pyLoad-ng (0.5+) only: API key or basic auth; legacy session login is not supported.
+pyload:
+  headers:
+    X-API-Key: "{key}"
+    Authorization: "Basic {basic}"
+  requests:
+    status: /api/status_server
+  fields:
+    - { label: Speed, value: .status.speed, format: rate }
+    - { label: Active, value: .status.active }
+    - { label: Queue, value: .status.queue }
+    - { label: Total, value: .status.total }
+
+slskd:
+  needs: [key]
+  headers: { X-API-Key: "{key}" }
+  requests:
+    application: /api/v0/application
+    downloads: /api/v0/transfers/downloads
+    uploads: /api/v0/transfers/uploads
+  fields:
+    - { label: Network, value: "if .application.server.isConnected then \"Connected\" else \"Disconnected\" end", format: text }
+    - { label: Downloads, value: "(.downloads // []) | length" }
+    - { label: Uploads, value: "(.uploads // []) | length" }
+    - { label: Files, value: ".application.shares.files // 0" }
+
+# Synology DSM web API; login uses API version 6 (DSM 6 and 7).
+downloadstation:
+  needs: [username, password]
+  login:
+    path: "/webapi/entry.cgi?api=SYNO.API.Auth&version=6&method=login&account={username}&passwd={password}&session=DownloadStation"
+    token: .data.sid
+    expired: ".success == false and ((.error.code? // 0) as $c | $c == 105 or $c == 106 or $c == 107 or $c == 119)"
+  requests:
+    list: "/webapi/entry.cgi?api=SYNO.DownloadStation.Task&version=1&method=list&additional=transfer&_sid={token}"
+  fields:
+    - { label: Leech, value: "[.list.data.tasks[]? | select(.additional.transfer.size_downloaded != .size)] | length" }
+    - { label: Download, value: "[.list.data.tasks[]? | .additional.transfer.speed_download // 0] | add // 0", format: rate }
+    - { label: Seed, value: "[.list.data.tasks[]? | select(.additional.transfer.size_downloaded == .size)] | length" }
+    - { label: Upload, value: "[.list.data.tasks[]? | .additional.transfer.speed_upload // 0] | add // 0", format: rate }
+
+# All qBittorrent instances, or one when `instance` (its id in qui) is set.
+qui:
+  needs: [key]
+  defaults: { instance: "" }
+  headers: { X-API-Key: "{key}" }
+  requests:
+    all: "/api/torrents/cross-instance?limit=1"
+    one:
+      path: "/api/instances/{item}/torrents?limit=1"
+      each: "[$options.instance | select(. != \"\")]"
+  fields:
+    - { label: Leech, value: "(.one[0] // .all) as $t | \"\\($t.stats.downloading) / \\(if $t.counts.status then $t.counts.status.all - $t.counts.status.completed else $t.stats.downloading end)\"", format: text }
+    - { label: Download, value: "(.one[0] // .all).stats.totalDownloadSpeed", format: rate }
+    - { label: Seed, value: "(.one[0] // .all) as $t | \"\\($t.stats.seeding) / \\($t.counts.status.completed // $t.stats.seeding)\"", format: text }
+    - { label: Upload, value: "(.one[0] // .all).stats.totalUploadSpeed", format: rate }
+    - { label: Total, value: "(.one[0] // .all) as $t | $t.counts.status.all // $t.stats.total" }
+    - { label: Errored, value: "(.one[0] // .all) as $t | $t.counts.status.errored // $t.stats.error" }
+    - { label: Ratio, value: "(.one[0] // .all).serverState.global_ratio | tonumber" }
+    - { label: Free, value: "(.one[0] // .all).serverState.free_space_on_disk", format: bytes }

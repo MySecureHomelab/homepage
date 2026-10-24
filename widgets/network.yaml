@@ -1,0 +1,359 @@
+# DNS filters, routers and firewalls, VPN and reverse proxies.
+# Each entry: needs (required options), headers, optional login, named requests,
+# and fields computed with jq over {"<request name>": <response>}. See src/widgets.rs.
+
+# Pi-hole v6 (session login with the web password as `key`).
+pihole:
+  needs: [key]
+  headers: { X-FTL-SID: "{token}" }
+  login: { path: /api/auth, method: POST, json: { password: "{key}" }, token: .session.sid }
+  requests:
+    summary: /api/stats/summary
+  fields:
+    - { label: Queries, value: .summary.queries.total }
+    - { label: Blocked, value: .summary.queries.blocked }
+    - { label: Blocked %, value: .summary.queries.percent_blocked, format: percent }
+    - { label: Gravity, value: .summary.gravity.domains_being_blocked }
+
+# Pi-hole v5 (legacy API, `key` is the API token). The key can only go in the query string.
+pihole5:
+  needs: [key]
+  requests:
+    summary: /admin/api.php?summaryRaw&auth={key}
+  fields:
+    - { label: Queries, value: .summary.dns_queries_today }
+    - { label: Blocked, value: .summary.ads_blocked_today }
+    - { label: Blocked %, value: .summary.ads_percentage_today, format: percent }
+    - { label: Gravity, value: .summary.domains_being_blocked }
+
+adguard:
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    stats: /control/stats
+  fields:
+    - { label: Queries, value: .stats.num_dns_queries }
+    - { label: Blocked, value: .stats.num_blocked_filtering }
+    - { label: Filtered, value: "(.stats.num_replaced_safebrowsing // 0) + (.stats.num_replaced_safesearch // 0) + (.stats.num_replaced_parental // 0)" }
+    - { label: Latency, value: '"\((.stats.avg_processing_time * 100000 | round) / 100) ms"', format: text }
+
+# `key` is an API token; optional `range` (LastHour, LastDay...) and cluster `node`.
+technitium:
+  needs: [key]
+  defaults: { range: LastHour }
+  requests:
+    stats:
+      path: /api/dashboard/stats/get
+      query: { token: "{key}", utc: "true", type: "{range}", node: "{node}" }
+  fields:
+    - { label: Queries, value: .stats.response.stats.totalQueries }
+    - { label: Success, value: .stats.response.stats.totalNoError }
+    - { label: Failures, value: .stats.response.stats.totalServerFailure }
+    - { label: NX Domains, value: .stats.response.stats.totalNxDomain }
+    - { label: Refused, value: .stats.response.stats.totalRefused }
+    - { label: Authoritative, value: .stats.response.stats.totalAuthoritative }
+    - { label: Recursive, value: .stats.response.stats.totalRecursive }
+    - { label: Cached, value: .stats.response.stats.totalCached }
+    - { label: Blocked, value: .stats.response.stats.totalBlocked }
+    - { label: Dropped, value: .stats.response.stats.totalDropped }
+    - { label: Clients, value: .stats.response.stats.totalClients }
+
+# Set the widget url to https://api.nextdns.io. `profile` is the profile ID.
+nextdns:
+  needs: [key, profile]
+  headers: { X-Api-Key: "{key}" }
+  requests:
+    status: /profiles/{profile}/analytics/status
+  fields:
+    - { label: Default, value: "[.status.data[]? | select(.status == \"default\") | .queries] | add // 0" }
+    - { label: Blocked, value: "[.status.data[]? | select(.status == \"blocked\") | .queries] | add // 0" }
+    - { label: Allowed, value: "[.status.data[]? | select(.status == \"allowed\") | .queries] | add // 0" }
+    - { label: Relayed, value: "[.status.data[]? | select(.status == \"relayed\") | .queries] | add // 0" }
+
+# UniFi OS console (UDM, Cloud Key...) with an API key. Uses the site named `site` (default "default"; name or description).
+# Older standalone controllers (login + CSRF) are not supported.
+unifi:
+  needs: [key]
+  defaults: { site: default }
+  headers: { X-API-KEY: "{key}", Accept: application/json }
+  requests:
+    sites: /proxy/network/api/stat/sites
+  fields:
+    - { label: Uptime, value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wan\") | .[\"gw_system-stats\"].uptime)", format: duration }
+    - { label: WAN, value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wan\") | if .status == \"ok\" then \"UP\" else \"DOWN\" end)", format: text }
+    - { label: LAN Users, value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"lan\") | .num_user)" }
+    - { label: WLAN Users, value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wlan\") | .num_user)" }
+
+# OPNsense: `username` / `password` are the API key / secret. `wan` is the interface to show (default wan).
+opnsense:
+  needs: [username, password]
+  defaults: { wan: wan }
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    activity: /api/diagnostics/activity/getActivity
+    interface: /api/diagnostics/traffic/interface
+  fields:
+    - { label: CPU Load, value: "100 - (.activity.headers[2] | split(\" idle\")[0] | split(\" \") | last | rtrimstr(\"%\") | tonumber)", format: percent }
+    - { label: Active Memory, value: ".activity.headers[3] | split(\" Active,\")[0] | ltrimstr(\"Mem: \")", format: text }
+    - { label: WAN Upload, value: ".interface.interfaces[$options.wan][\"bytes transmitted\"] | tonumber", format: bytes }
+    - { label: WAN Download, value: ".interface.interfaces[$options.wan][\"bytes received\"] | tonumber", format: bytes }
+
+# pfSense with the pfSense REST API package v2: an API key (`key`) or admin `username` / `password`.
+# `wan` is the interface to show, by name or hardware id such as igb0 (default wan).
+pfsense:
+  defaults: { wan: wan }
+  headers: { X-API-Key: "{key}", Authorization: "Basic {basic}" }
+  requests:
+    system: /api/v2/status/system
+    interfaces: /api/v2/status/interfaces?limit=0&offset=0
+  fields:
+    - { label: Load Avg, value: ".system.data.cpu_load_avg[0]" }
+    - { label: Mem Usage, value: .system.data.mem_usage, format: percent }
+    - { label: Temp, value: '"\(.system.data.temp_c)°C"', format: text }
+    - { label: WAN Status, value: "[.interfaces.data[] | select(.name == $options.wan or .hwif == $options.wan)][0].status | if . == \"up\" then \"Up\" else \"Down\" end", format: text }
+    - { label: WAN IP, value: "[.interfaces.data[] | select(.name == $options.wan or .hwif == $options.wan)][0].ipaddr", format: text }
+    - { label: Disk Usage, value: .system.data.disk_usage, format: percent }
+
+# RouterOS 7 REST API (/rest) with an admin `username` / `password`. RouterOS returns numbers as strings.
+mikrotik:
+  needs: [username, password]
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    system: /rest/system/resource
+    leases: /rest/ip/dhcp-server/lease?.proplist=address
+  fields:
+    - { label: Uptime, value: '.system.uptime', format: text }
+    - { label: CPU Load, value: '.system["cpu-load"] | tonumber', format: percent }
+    - { label: Memory Used, value: '100 - (.system["free-memory"] | tonumber) / (.system["total-memory"] | tonumber) * 100', format: percent }
+    - { label: Leases, value: "(.leases // []) | length" }
+
+# OpenWrt over ubus (rpcd, needs uhttpd-mod-ubus and an rpcd user): system stats.
+openwrt:
+  needs: [username, password]
+  login:
+    path: /ubus
+    method: POST
+    json: { jsonrpc: "2.0", id: 1, method: call, params: ["00000000000000000000000000000000", session, login, { username: "{username}", password: "{password}" }] }
+    token: .result[1].ubus_rpc_session
+    expired: '.error.code? == -32002'
+  requests:
+    system:
+      path: /ubus
+      method: POST
+      json: { jsonrpc: "2.0", id: 1, method: call, params: ["{token}", system, info, {}] }
+  fields:
+    - { label: Uptime, value: ".system.result[1].uptime", format: duration }
+    - { label: CPU Load Avg (5m), value: ".system.result[1].load[1] / 65536 * 100 | round / 100" }
+
+# OpenWrt network interface counters; `interfaceName` is e.g. wan or eth0.
+openwrt_interface:
+  needs: [username, password, interfaceName]
+  login:
+    path: /ubus
+    method: POST
+    json: { jsonrpc: "2.0", id: 1, method: call, params: ["00000000000000000000000000000000", session, login, { username: "{username}", password: "{password}" }] }
+    token: .result[1].ubus_rpc_session
+    expired: '.error.code? == -32002'
+  requests:
+    device:
+      path: /ubus
+      method: POST
+      json: { jsonrpc: "2.0", id: 1, method: call, params: ["{token}", network.device, status, {}] }
+  fields:
+    - { label: Status, value: 'if .device.result[1][$options.interfaceName].up then "Up" else "Down" end', format: text }
+    - { label: Transmitted, value: ".device.result[1][$options.interfaceName].statistics.tx_bytes", format: bytes }
+    - { label: Received, value: ".device.result[1][$options.interfaceName].statistics.rx_bytes", format: bytes }
+
+# Tailscale API (https://api.tailscale.com, so set `url: https://api.tailscale.com`).
+# `key` is an API access token, `deviceid` the device (node) ID.
+tailscale:
+  needs: [key, deviceid]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    device: /api/v2/device/{deviceid}
+  fields:
+    - { label: Address, value: ".device.addresses[0]", format: text }
+    - { label: Last Seen, value: "now - (.device.lastSeen[0:19] + \"Z\" | fromdateiso8601)", format: duration }
+    - label: Expires
+      value: 'if .device.keyExpiryDisabled then "Never" else ((.device.expires[0:19] + "Z" | fromdateiso8601) - now) / 86400 | floor | "\(.) days" end'
+      format: text
+    - { label: User, value: .device.user, format: text }
+    - { label: Hostname, value: .device.hostname, format: text }
+    - { label: OS, value: .device.os, format: text }
+    - { label: Client Version, value: '.device.clientVersion // "-"', format: text }
+    - { label: Update Available, value: 'if .device.updateAvailable then "Yes" else "No" end', format: text }
+
+# Headscale API key and node id (numeric id of a node).
+headscale:
+  needs: [key, nodeId]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    node: /api/v1/node/{nodeId}
+  fields:
+    - { label: Name, value: .node.node.givenName, format: text }
+    - { label: Address, value: ".node.node.ipAddresses[0]", format: text }
+    - { label: Last Seen, value: "now - (.node.node.lastSeen[0:19] + \"Z\" | fromdateiso8601)", format: duration }
+    - { label: Status, value: 'if .node.node.online then "Online" else "Offline" end', format: text }
+
+# NetAlertX v2 API (`key` is the API token).
+netalertx:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    totals: /devices/totals
+  fields:
+    - { label: Total, value: ".totals[0]" }
+    - { label: Connected, value: ".totals[1]" }
+    - { label: New Devices, value: ".totals[3]" }
+    - { label: Down Alerts, value: ".totals[4]" }
+
+# NetAlertX legacy (PHP) API.
+netalertx1:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    totals: /php/server/devices.php?action=getDevicesTotals
+  fields:
+    - { label: Total, value: ".totals[0]" }
+    - { label: Connected, value: ".totals[1]" }
+    - { label: New Devices, value: ".totals[3]" }
+    - { label: Down Alerts, value: ".totals[4]" }
+
+# Gluetun control server (port 8000). `key` is optional (only if the control server has auth).
+# The forwarded port is left out: its endpoint errors when port forwarding is off.
+gluetun:
+  headers: { X-API-Key: "{key}" }
+  requests:
+    ip: /v1/publicip/ip
+  fields:
+    - { label: Public IP, value: .ip.public_ip, format: text }
+    - { label: Region, value: .ip.region, format: text }
+    - { label: Country, value: .ip.country, format: text }
+
+# wg-easy up to v14: `password` is the web UI password. "Connected" = handshake within `threshold` minutes (default 2).
+wgeasy:
+  needs: [password]
+  defaults: { threshold: "2" }
+  headers: { Authorization: "{password}" }
+  requests:
+    clients: /api/wireguard/client
+  fields:
+    - { label: Connected, value: '[.clients[] | select(.latestHandshakeAt != null and (now - (.latestHandshakeAt[0:19] + "Z" | fromdateiso8601)) < ($options.threshold | tonumber) * 60)] | length' }
+    - { label: Enabled, value: "[.clients[] | select(.enabled)] | length" }
+    - { label: Disabled, value: "[.clients[] | select(.enabled | not)] | length" }
+    - { label: Total, value: ".clients | length" }
+
+# wg-easy v15+: `username` / `password` of an admin, same `threshold`.
+wgeasy2:
+  needs: [username, password]
+  defaults: { threshold: "2" }
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    clients: /api/client
+  fields:
+    - { label: Connected, value: '[.clients[] | select(.latestHandshakeAt != null and (now - (.latestHandshakeAt[0:19] + "Z" | fromdateiso8601)) < ($options.threshold | tonumber) * 60)] | length' }
+    - { label: Enabled, value: "[.clients[] | select(.enabled)] | length" }
+    - { label: Disabled, value: "[.clients[] | select(.enabled | not)] | length" }
+    - { label: Total, value: ".clients | length" }
+
+# Nginx Proxy Manager: an admin `username` (email) / `password`.
+npm:
+  needs: [username, password]
+  headers: { Authorization: "Bearer {token}" }
+  login: { path: /api/tokens, method: POST, json: { identity: "{username}", secret: "{password}" }, token: .token }
+  requests:
+    hosts: /api/nginx/proxy-hosts
+  fields:
+    - { label: Enabled, value: "[.hosts[] | select(.enabled == true or .enabled == 1)] | length" }
+    - { label: Disabled, value: "[.hosts[] | select(.enabled == true or .enabled == 1 | not)] | length" }
+    - { label: Total, value: ".hosts | length" }
+
+# Traefik API (api@internal). `username` / `password` only if it sits behind basic auth.
+traefik:
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    overview: /api/overview
+  fields:
+    - { label: Routers, value: .overview.http.routers.total }
+    - { label: Services, value: .overview.http.services.total }
+    - { label: Middleware, value: .overview.http.middlewares.total }
+
+# Caddy admin API (default port 2019).
+caddy:
+  requests:
+    upstreams: /reverse_proxy/upstreams
+  fields:
+    - { label: Upstreams, value: ".upstreams | length" }
+    - { label: Current requests, value: "[.upstreams[].num_requests] | add // 0" }
+    - { label: Failed requests, value: "[.upstreams[].fails] | add // 0" }
+
+# CrowdSec local API: the machine `username` / `password` (cscli machines add).
+crowdsec:
+  needs: [username, password]
+  headers: { Authorization: "Bearer {token}", User-Agent: Mozilla/5.0 }
+  login:
+    path: /v1/watchers/login
+    method: POST
+    json: { machine_id: "{username}", password: "{password}", scenarios: [] }
+    token: .token
+  requests:
+    alerts: /v1/alerts?limit=500&since=24h&with_decisions=false&include_capi=false
+    bans: /v1/alerts?decision_type=ban&include_capi=false&has_active_decision=1&with_decisions=false
+  fields:
+    - { label: Alerts, value: "(.alerts // []) | length" }
+    - { label: Bans, value: "(.bans // []) | length" }
+
+# Cloudflare Tunnel via the Cloudflare API: set `url: https://api.cloudflare.com`.
+# `key` is an API token (Account > Cloudflare Tunnel > Read), plus `accountid` and `tunnelid`.
+cloudflared:
+  needs: [key, accountid, tunnelid]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    tunnel: /client/v4/accounts/{accountid}/cfd_tunnel/{tunnelid}
+    connections: /client/v4/accounts/{accountid}/cfd_tunnel/{tunnelid}/connections
+  fields:
+    - { label: Status, value: ".tunnel.result.status | (.[0:1] | ascii_upcase) + .[1:]", format: text }
+    - { label: Origin IP, value: '[.connections.result[]?.conns[]?.origin_ip | select(. != null)][0] // "-"', format: text }
+
+# NetBird management API with a personal access token (`key`).
+netbird:
+  needs: [key]
+  headers: { Authorization: "Token {key}" }
+  requests:
+    peers: /api/peers
+    users: /api/users
+  fields:
+    - { label: Online Peers, value: '"\([.peers[] | select(.connected)] | length) / \(.peers | length)"', format: text }
+    - { label: Users, value: "[.users[] | select(.is_service_user | not)] | length" }
+    - { label: Login Expired, value: "[.peers[] | select(.login_expired)] | length" }
+
+# Pangolin integration API: `key` is an API key, `org` the organization id.
+pangolin:
+  needs: [key, org]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    sites: /v1/org/{org}/sites
+    resources: /v1/org/{org}/resources?pageSize=200
+  fields:
+    - { label: Sites, value: '"\([(.sites.data.sites // [])[] | select(.online)] | length) / \((.sites.data.sites // []) | length)"', format: text }
+    - label: Resources
+      value: '"\([(.resources.data.resources // [])[] | select((.targets // []) | length == 0 or any(.healthStatus != "unhealthy"))] | length) / \((.resources.data.resources // []) | length)"'
+      format: text
+    - label: Targets
+      value: '"\([(.resources.data.resources // [])[] | (.targets // [])[] | select(.healthStatus != "unhealthy")] | length) / \([(.resources.data.resources // [])[] | (.targets // [])[]] | length)"'
+      format: text
+    - { label: Traffic, value: "([(.sites.data.sites // [])[] | (.megabytesIn // 0) + (.megabytesOut // 0)] | add // 0) * 1000000", format: bytes }
+    - { label: In, value: "([(.sites.data.sites // [])[] | .megabytesIn // 0] | add // 0) * 1000000", format: bytes }
+    - { label: Out, value: "([(.sites.data.sites // [])[] | .megabytesOut // 0] | add // 0) * 1000000", format: bytes }
+
+# authentik API token (`key`), events volume API (authentik 2025.x+).
+authentik:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    users: /api/v3/core/users/?page_size=1
+    events: /api/v3/events/events/volume/?actions=login&actions=login_failed&actions=authorize_application&history_days=1
+  fields:
+    - { label: Users, value: .users.pagination.count }
+    - { label: Logins (24h), value: '[.events[]? | select(.action == "login") | .count] | add // 0' }
+    - { label: Failed Logins (24h), value: '[.events[]? | select(.action == "login_failed") | .count] | add // 0' }
+    - { label: Auths (24h), value: '[.events[]? | select(.action == "authorize_application") | .count] | add // 0' }

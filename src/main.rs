@@ -1,6 +1,7 @@
 mod config;
 mod discovery;
 mod monitor;
+mod widgets;
 
 use actix_web::{
     App, HttpResponse, HttpServer, Responder, get, http::header, middleware::DefaultHeaders, web,
@@ -35,6 +36,8 @@ pub struct State {
     /// `docker://host/container` → running and not unhealthy.
     pub containers: RwLock<HashMap<String, bool>>,
     pub status: RwLock<HashMap<String, Status>>,
+    /// Widget stats by `group/service`.
+    pub widgets: RwLock<HashMap<String, widgets::Stats>>,
     pub resources: RwLock<Option<Resources>>,
 }
 
@@ -91,19 +94,27 @@ struct Index<'a> {
     cfg: &'a Config,
     groups: Vec<Group>,
     error: Option<String>,
+    widgets: HashMap<String, widgets::Stats>,
+}
+
+impl Index<'_> {
+    fn stats(&self, group: &str, service: &str) -> Option<&widgets::Stats> {
+        self.widgets.get(&monitor::widget_key(group, service))
+    }
 }
 
 #[get("/")]
 async fn index(state: web::Data<State>) -> impl Responder {
     let (cfg, error) = state.config();
     let groups = state.groups(&cfg);
-    match (Index {
+    let widgets = state.widgets.read().unwrap().clone();
+    let page = Index {
         cfg: &cfg,
         groups,
         error,
-    })
-    .render()
-    {
+        widgets,
+    };
+    match page.render() {
         Ok(html) => HttpResponse::Ok()
             .content_type("text/html; charset=utf-8")
             .body(html),
@@ -132,6 +143,7 @@ async fn js() -> impl Responder {
 #[derive(Serialize)]
 struct Snapshot {
     status: HashMap<String, Status>,
+    widgets: HashMap<String, widgets::Stats>,
     resources: Option<Resources>,
 }
 
@@ -150,6 +162,7 @@ async fn api_state(state: web::Data<State>) -> impl Responder {
     }
     web::Json(Snapshot {
         status,
+        widgets: state.widgets.read().unwrap().clone(),
         resources: state.resources.read().unwrap().clone(),
     })
 }
@@ -184,6 +197,7 @@ async fn main() -> std::io::Result<()> {
         discovered: RwLock::default(),
         containers: RwLock::default(),
         status: RwLock::default(),
+        widgets: RwLock::default(),
         resources: RwLock::default(),
     });
     actix_web::rt::spawn(discovery::run(state.clone()));

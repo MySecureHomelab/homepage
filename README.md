@@ -24,6 +24,25 @@ docker build -t homepage .
 docker run -p 3000:3000 -v ./config.yaml:/config/config.yaml:ro homepage
 ```
 
+## Widgets de services
+
+Une carte de service peut afficher les stats de son API : files d'attente des \*arr, débits des clients torrent, requêtes bloquées par Pi-hole, VMs de Proxmox… Les appels partent du serveur : les clés API n'arrivent jamais dans le navigateur.
+
+```yaml
+- name: Sonarr
+  url: https://sonarr.lan
+  widget:
+    type: sonarr
+    key: ${SONARR_API_KEY}        # ou ${file:/run/secrets/sonarr}
+    # fields: [Wanted, Queued]     # choisir et ordonner les stats
+```
+
+`${VAR}` (variable d'environnement) et `${file:/chemin}` (contenu d'un fichier) marchent partout dans la config.
+
+Chaque type de widget est une définition déclarative : des requêtes, l'auth et des champs calculés en jq. Tu peux ajouter tes propres types dans la config (`widget_types`) sans recompiler. Le format est décrit dans [docs/widgets.md](docs/widgets.md).
+
+Types intégrés (140) : adguard, arcane, argocd, audiobookshelf, authentik, autobrr, azuredevops, backrest, bazarr, beszel, booklore, caddy, calibreweb, changedetectionio, channelsdvrserver, checkmk, cloudflared, crowdsec, deluge, diskstation, dockhand, downloadstation, duplicati, emby, esphome, evcc, filebrowser, fileflows, firefly, flood, freshrss, frigate, gatus, ghostfolio, gitea, gitlab, glances, gluetun, gotify, grafana, headscale, healthchecks, homeassistant, homebox, homebridge, immich, jackett, jellyfin, jellyseerr, jellystat, karakeep, kavita, komga, komodo, kopia, lidarr, linkwarden, lubelogger, maintainerr, mastodon, mealie, medusa, mikrotik, miniflux, moonraker, mylar, myspeed, navidrome, netalertx, netalertx1, netbird, netdata, nextcloud, nextdns, npm, ntfy, nzbget, octoprint, ombi, opendtu, openmediavault, openwrt, openwrt_interface, opnsense, overseerr, pangolin, paperlessngx, peanut, pfsense, photoprism, pihole, pihole5, plex, portainer, prometheus, prowlarr, proxmox, proxmoxbackupserver, pterodactyl, pulse, pyload, qbittorrent, qui, radarr, readarr, romm, rutorrent, sabnzbd, scrutiny, seerr, slskd, sonarr, speedtest, spoolman, sportarr, stash, syncthing, tailscale, tandoor, tautulli, tdarr, technitium, traefik, transmission, trilium, truenas, tubearchivist, unifi, unmanic, unraid, uptimekuma, uptimerobot, vikunja, wallos, watchtower, wgeasy, wgeasy2, whatsupdocker, yourspotify, zabbix.
+
 ## Découverte automatique
 
 Les services peuvent venir des conteneurs Docker et des Ingress Kubernetes. Les labels et annotations sont ceux de gethomepage.dev, donc une install existante marche telle quelle. La découverte tourne toutes les 15 s.

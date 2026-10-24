@@ -13,6 +13,9 @@ groups:
         icon: jellyfin
         description: Films & séries
         check: https://jellyfin.lan/health
+        # widget:                    # live stats, see docs/widgets.md
+        #   type: jellyfin
+        #   key: ${JELLYFIN_API_KEY}   # environment variable, or ${file:/run/secrets/jellyfin}
       - name: Immich
         url: https://photos.lan
         icon: immich

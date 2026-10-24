@@ -1,0 +1,450 @@
+# Self-hosted apps: home automation, documents, recipes, dev tools, notes, 3D printing, energy.
+# Each entry: needs (required options), headers, optional login, named requests,
+# and fields computed with jq over {"<request name>": <response>}. See src/widgets.rs.
+
+homeassistant:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    states: /api/states
+  fields:
+    - { label: People Home, format: text, value: '[.states[] | select(.entity_id | startswith("person."))] | "\([.[] | select(.state == "home")] | length) / \(length)"' }
+    - { label: Lights On, format: text, value: '[.states[] | select(.entity_id | startswith("light."))] | "\([.[] | select(.state == "on")] | length) / \(length)"' }
+    - { label: Switches On, format: text, value: '[.states[] | select(.entity_id | startswith("switch."))] | "\([.[] | select(.state == "on")] | length) / \(length)"' }
+
+nextcloud:
+  headers:
+    NC-Token: "{key}"
+    Authorization: "Basic {basic}"
+  requests:
+    info: /ocs/v2.php/apps/serverinfo/api/v1/info?format=json
+  fields:
+    - { label: Free Space, format: bytes, value: .info.ocs.data.nextcloud.system.freespace }
+    - { label: Active Users, value: .info.ocs.data.activeUsers.last24hours }
+    - { label: Files, value: .info.ocs.data.nextcloud.storage.num_files }
+    - { label: Shared Items, value: .info.ocs.data.nextcloud.shares.num_shares }
+
+# key: an API token, or username + password.
+paperlessngx:
+  headers:
+    Authorization: ["Token {key}", "Basic {basic}"]
+  requests:
+    stats: /api/statistics/?format=json
+  fields:
+    - { label: Inbox, value: .stats.documents_inbox }
+    - { label: Total, value: .stats.documents_total }
+
+mealie:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    stats: /api/households/statistics   # Mealie v2+; v1 used /api/groups/statistics
+  fields:
+    - { label: Recipes, value: .stats.totalRecipes }
+    - { label: Users, value: .stats.totalUsers }
+    - { label: Categories, value: .stats.totalCategories }
+    - { label: Tags, value: .stats.totalTags }
+
+tandoor:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    space: /api/space/
+    keyword: /api/keyword/
+  fields:
+    - { label: Users, value: "(.space | if type == \"array\" then . else .results end)[0].user_count" }
+    - { label: Recipes, value: "(.space | if type == \"array\" then . else .results end)[0].recipe_count" }
+    - { label: Keywords, value: .keyword.count }
+
+gitea:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    notifications: { path: "/api/v1/notifications?limit=1", header: X-Total-Count }
+    issues: { path: "/api/v1/repos/issues/search?type=issues&limit=1", header: X-Total-Count }
+    pulls: { path: "/api/v1/repos/issues/search?type=pulls&limit=1", header: X-Total-Count }
+    repos: { path: "/api/v1/repos/search?limit=1", header: X-Total-Count }
+  fields:
+    - { label: Notifications, value: .notifications }
+    - { label: Issues, value: .issues }
+    - { label: Pull Requests, value: .pulls }
+    - { label: Repositories, value: .repos }
+
+gitlab:
+  needs: [key, user_id]
+  headers: { PRIVATE-TOKEN: "{key}" }
+  requests:
+    counts: /api/v4/users/{user_id}/associations_count
+  fields:
+    - { label: Groups, value: .counts.groups_count }
+    - { label: Issues, value: .counts.issues_count }
+    - { label: Merge Requests, value: .counts.merge_requests_count }
+    - { label: Projects, value: .counts.projects_count }
+
+# key: a client token. Messages are counted over the latest 200.
+gotify:
+  needs: [key]
+  headers: { X-Gotify-Key: "{key}" }
+  requests:
+    apps: /application
+    clients: /client
+    messages: /message?limit=200
+  fields:
+    - { label: Applications, value: ".apps | length" }
+    - { label: Clients, value: ".clients | length" }
+    - { label: Messages, format: text, value: '(.messages.messages // []) | length | if . >= 200 then "200+" else . end' }
+
+# Shows the latest message of a topic. Protected topics: key (access token) or username + password.
+ntfy:
+  needs: [topic]
+  headers:
+    Authorization: ["Bearer {key}", "Basic {basic}"]
+  requests:
+    messages: /{topic}/json?poll=1&since=latest
+  fields:
+    - { label: Title, format: text, value: ".messages | objects | .title" }
+    - { label: Message, format: text, value: ".messages | objects | .message" }
+    - { label: Priority, format: text, value: '.messages | objects | ({"1": "Min", "2": "Low", "3": "Default", "4": "High", "5": "Urgent"})[(.priority // 3) | tostring]' }
+    - { label: Last Received, format: duration, value: ".messages | objects | select(.time != null) | now - .time" }
+    - { label: Tags, format: text, value: '.messages | objects | (.tags // []) | if length > 0 then join(", ") else "None" end' }
+
+miniflux:
+  needs: [key]
+  headers: { X-Auth-Token: "{key}" }
+  requests:
+    counters: /v1/feeds/counters
+  fields:
+    - { label: Unread, value: "[(.counters.unreads // {})[]] | add // 0" }
+    - { label: Read, value: "[(.counters.reads // {})[]] | add // 0" }
+
+linkwarden:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    collections: /api/v1/collections
+    tags: /api/v1/tags
+  fields:
+    - { label: Links, value: '(.collections | if type == "array" then . else .response end) | [.[] | ._count.links // 0] | add // 0' }
+    - { label: Collections, value: '(.collections | if type == "array" then . else .response end) | length' }
+    - { label: Tags, value: '(.tags | if type == "array" then . else (.response // .data.tags) end) | length' }
+
+karakeep:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    stats: /api/v1/users/me/stats
+  fields:
+    - { label: Bookmarks, value: .stats.numBookmarks }
+    - { label: Favorites, value: .stats.numFavorites }
+    - { label: Archived, value: .stats.numArchived }
+    - { label: Highlights, value: .stats.numHighlights }
+
+# Vikunja 0.24+ (tasks endpoint); looks at the first 500 open tasks.
+# Due dates are compared as UTC timestamps.
+vikunja:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    projects: /api/v1/projects
+    tasks: /api/v1/tasks?filter=done%3Dfalse&per_page=500
+  fields:
+    - { label: Active Projects, value: "[.projects[] | select(.id > 0)] | length" }
+    - { label: Tasks Due This Week, value: '[.tasks[] | select(.due_date != "0001-01-01T00:00:00Z" and .due_date <= (now + 604800 | todate))] | length' }
+    - { label: Overdue Tasks, value: '[.tasks[] | select(.due_date != "0001-01-01T00:00:00Z" and .due_date <= (now | todate))] | length' }
+    - { label: Tasks In Progress, value: "[.tasks[] | select(.percent_done > 0 and .percent_done < 1)] | length" }
+
+changedetectionio:
+  needs: [key]
+  headers: { x-api-key: "{key}" }
+  requests:
+    watch: /api/v1/watch
+  fields:
+    - { label: Diffs Detected, value: "[.watch[] | select(.last_changed > 0 and (.viewed | not))] | length" }
+    - { label: Total Observed, value: ".watch | length" }
+
+# Speedtest Tracker (alexjustesen). key: API token. Results are in bytes per second.
+speedtest:
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    latest: /api/v1/results/latest
+  fields:
+    - { label: Download, format: bitrate, value: ".latest.data.download * 8" }
+    - { label: Upload, format: bitrate, value: ".latest.data.upload * 8" }
+    - { label: Ping, format: text, value: '"\((.latest.data.ping * 10 | round) / 10) ms"' }
+
+# password: the MySpeed password, if one is set. Results are in Mbps.
+myspeed:
+  headers: { Password: "{password}" }
+  requests:
+    tests: /api/speedtests?limit=1
+  fields:
+    - { label: Download, format: bitrate, value: ".tests[0].download * 1000000" }
+    - { label: Upload, format: bitrate, value: ".tests[0].upload * 1000000" }
+    - { label: Ping, format: text, value: '"\((.tests[0].ping * 10 | round) / 10) ms"' }
+
+# Unauthenticated Frigate API (port 5000).
+frigate:
+  requests:
+    stats: /api/stats
+  fields:
+    - { label: Cameras, value: "(.stats.cameras // {}) | length" }
+    - { label: Uptime, format: duration, value: .stats.service.uptime }
+    - { label: Version, format: text, value: .stats.service.version }
+
+# Auth is optional: username + password, or key (the "authenticated" cookie value).
+esphome:
+  headers:
+    Authorization: "Basic {basic}"
+    Cookie: "authenticated={key}"
+  requests:
+    ping: /ping
+  fields:
+    - { label: Online, value: "[.ping[] | select(. == true)] | length" }
+    - { label: Offline, value: "[.ping[] | select(. == false)] | length" }
+    - { label: Unknown, value: "[.ping[] | select(. == null)] | length" }
+    - { label: Total, value: ".ping | length" }
+
+homebridge:
+  needs: [username, password]
+  headers: { Authorization: "Bearer {token}" }
+  login: { path: /api/auth/login, method: POST, json: { username: "{username}", password: "{password}" }, token: .access_token }
+  requests:
+    status: /api/status/homebridge
+    version: /api/status/homebridge-version
+    bridges: /api/status/homebridge/child-bridges
+    plugins: /api/plugins
+  fields:
+    - { label: Status, format: text, value: ".status.status | (.[:1] | ascii_upcase) + .[1:]" }
+    - { label: Updates, format: text, value: 'if .version.updateAvailable or ([.plugins[] | select(.updateAvailable)] | length) > 0 then "Update Available" else "Up to Date" end' }
+    - { label: Child Bridges, format: text, value: '(.bridges // []) | select(length > 0) | "\([.[] | select(.status == "ok")] | length)/\(length)"' }
+
+octoprint:
+  needs: [key]
+  headers: { X-Api-Key: "{key}" }
+  requests:
+    printer: { path: /api/printer, optional: true }   # 409 while the printer is disconnected
+    job: /api/job
+  fields:
+    - { label: Status, format: text, value: ".printer.state.text // .job.state" }
+    - { label: Tool temp, format: text, value: '.printer.temperature.tool0.actual | select(. != null) | "\(.) °C"' }
+    - { label: Bed temp, format: text, value: '.printer.temperature.bed.actual | select(. != null) | "\(.) °C"' }
+    - { label: Completion, format: percent, value: .job.progress.completion }
+
+# key: Moonraker API key, only if authorization is enabled.
+moonraker:
+  headers: { X-Api-Key: "{key}" }
+  requests:
+    q: /printer/objects/query?print_stats&display_status
+  fields:
+    - { label: Layers, format: text, value: '.q.result.status.print_stats | if .state == "standby" then "- / -" else "\(.info.current_layer // "-") / \(.info.total_layer // "-")" end' }
+    - { label: Progress, format: percent, value: '.q.result.status | if .print_stats.state == "standby" then null else .display_status.progress * 100 end' }
+    - { label: Print Status, format: text, value: .q.result.status.print_stats.state }
+
+mastodon:
+  requests:
+    instance: /api/v1/instance
+  fields:
+    - { label: Users, value: .instance.stats.user_count }
+    - { label: Posts, value: .instance.stats.status_count }
+    - { label: Domains, value: .instance.stats.domain_count }
+
+# key: the Ghostfolio security token's JWT (Bearer).
+ghostfolio:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    today: /api/v2/portfolio/performance?range=1d
+    year: /api/v2/portfolio/performance?range=1y
+    max: /api/v2/portfolio/performance?range=max
+    user: /api/v1/user
+  fields:
+    - { label: Today, format: text, value: '.today.performance | (.netPerformancePercentageWithCurrencyEffect // .grossPerformancePercentage // .currentGrossPerformancePercent) as $p | "\(if $p > 0 then "+" else "" end)\(($p * 10000 | round) / 100)%"' }
+    - { label: One year, format: text, value: '.year.performance | (.netPerformancePercentageWithCurrencyEffect // .grossPerformancePercentage // .currentGrossPerformancePercent) as $p | "\(if $p > 0 then "+" else "" end)\(($p * 10000 | round) / 100)%"' }
+    - { label: All time, format: text, value: '.max.performance | (.netPerformancePercentageWithCurrencyEffect // .grossPerformancePercentage // .currentGrossPerformancePercent) as $p | "\(if $p > 0 then "+" else "" end)\(($p * 10000 | round) / 100)%"' }
+    - { label: Net Worth, format: text, value: '"\((.today.performance.currentNetWorth * 100 | round) / 100) \(.user.settings.baseCurrency // .user.settings.currency // "")"' }
+
+# Kilowatts, as in the gethomepage widget (grid and charger are clamped at 0).
+evcc:
+  requests:
+    state: /api/state
+  fields:
+    - { label: Production, format: text, value: '(.state.result // .state) as $d | "\(([$d.pvPower // 0, 0] | max) / 100 | round / 10) kW"' }
+    - { label: Grid, format: text, value: '(.state.result // .state) as $d | "\(([$d.gridPower // $d.grid.power // 0, 0] | max) / 100 | round / 10) kW"' }
+    - { label: Consumption, format: text, value: '(.state.result // .state) as $d | "\(([$d.homePower // 0, 0] | max) / 100 | round / 10) kW"' }
+    - { label: Charger, format: text, value: '(.state.result // .state) as $d | "\(([[($d.loadpoints // [])[] | .chargePower // 0] | add // 0, 0] | max) / 100 | round / 10) kW"' }
+
+# Basic auth is optional (username + password).
+opendtu:
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    live: /api/livedata/status
+  fields:
+    - { label: Today, format: text, value: '"\(.live.total.YieldDay.v | round) \(.live.total.YieldDay.u)"' }
+    - { label: Power %, format: percent, value: '([.live.inverters[]? | .limit_absolute // 0] | add // 0) as $l | if $l > 0 then (.live.total.Power.v / $l * 100 | round) else null end' }
+    - { label: Power, format: text, value: '"\(.live.total.Power.v | round) \(.live.total.Power.u)"' }
+    - { label: Limit, format: text, value: '"\([.live.inverters[]? | .limit_absolute // 0] | add // 0 | round) W"' }
+
+homebox:
+  needs: [username, password]
+  headers: { Authorization: "{token}" }
+  login: { path: /api/v1/users/login, method: POST, form: { username: "{username}", password: "{password}" }, token: .token }
+  requests:
+    stats: /api/v1/groups/statistics
+    group: /api/v1/groups
+  fields:
+    - { label: Items, value: .stats.totalItems }
+    - { label: Locations, value: .stats.totalLocations }
+    - { label: Total Value, format: text, value: '"\((.stats.totalItemPrice * 100 | round) / 100) \(.group.currency // "")"' }
+
+wallos:
+  needs: [key]
+  computed:
+    prev_month: '(now | strftime("%Y-%m-01T00:00:00Z") | fromdateiso8601) - 86400 | strftime("%m") | tonumber | tostring'
+    prev_year: '(now | strftime("%Y-%m-01T00:00:00Z") | fromdateiso8601) - 86400 | strftime("%Y")'
+    this_month: 'now | strftime("%m") | tonumber | tostring'
+    this_year: 'now | strftime("%Y")'
+    next_month: '(now | strftime("%Y-%m-01T00:00:00Z") | fromdateiso8601) + 32 * 86400 | strftime("%m") | tonumber | tostring'
+    next_year: '(now | strftime("%Y-%m-01T00:00:00Z") | fromdateiso8601) + 32 * 86400 | strftime("%Y")'
+  requests:
+    subs: /api/subscriptions/get_subscriptions.php?api_key={key}&state=0&sort=next_payment
+    prev: { path: "/api/subscriptions/get_monthly_cost.php", query: { api_key: "{key}", month: "{prev_month}", year: "{prev_year}" }, optional: true }
+    this: { path: "/api/subscriptions/get_monthly_cost.php", query: { api_key: "{key}", month: "{this_month}", year: "{this_year}" }, optional: true }
+    next: { path: "/api/subscriptions/get_monthly_cost.php", query: { api_key: "{key}", month: "{next_month}", year: "{next_year}" }, optional: true }
+  fields:
+    - { label: Subscriptions, value: ".subs.subscriptions | length" }
+    - { label: Next Payment, format: text, value: ".subs.subscriptions[0].name" }
+    - { label: Prev. Month, format: text, value: ".prev.localized_monthly_cost" }
+    - { label: This Month, format: text, value: ".this.localized_monthly_cost" }
+    - { label: Next Month, format: text, value: ".next.localized_monthly_cost" }
+
+# key: an ETAPI token.
+trilium:
+  needs: [key]
+  headers: { Authorization: "{key}" }
+  requests:
+    metrics: /etapi/metrics?format=json
+  fields:
+    - { label: Version, format: text, value: '.metrics.version.app | select(. != null) | "v\(.)"' }
+    - { label: Notes, value: ".metrics.database.activeNotes // 0" }
+    - { label: Database Size, format: bytes, value: ".metrics.statistics.databaseSizeBytes // 0" }
+
+syncthing:
+  needs: [key]
+  headers: { X-API-Key: "{key}" }
+  requests:
+    connections: /rest/system/connections
+    completion: /rest/db/completion
+    error: /rest/system/error
+  fields:
+    - { label: Connected, format: text, value: '.connections.connections | [.[]] | "\([.[] | select(.connected)] | length) / \(length)"' }
+    - { label: Synced, format: percent, value: .completion.completion }
+    - { label: Errors, value: "(.error.errors // []) | length" }
+    - { label: Storage, format: bytes, value: .completion.globalBytes }
+
+# Basic auth is optional (username + password).
+lubelogger:
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    vehicles: /api/vehicle/info
+  fields:
+    - { label: Vehicles, value: ".vehicles | length" }
+    - { label: Service Records, value: "[.vehicles[] | .serviceRecordCount // 0] | add // 0" }
+    - { label: Reminders, value: "[.vehicles[] | (.veryUrgentReminderCount // 0) + (.urgentReminderCount // 0) + (.notUrgentReminderCount // 0)] | add // 0" }
+
+# Summary of all spools (the per-spool blocks of gethomepage need dynamic labels).
+spoolman:
+  requests:
+    spools: /api/v1/spool
+  fields:
+    - { label: Spools, value: ".spools | length" }
+    - { label: Remaining, format: text, value: '[.spools[] | .remaining_weight // 0] | add // 0 | "\(round) g"' }
+    - { label: Lowest, format: text, value: '[.spools[] | select((.initial_weight // 0) > 0) | {n: .filament.name, p: ((.remaining_weight // 0) / .initial_weight * 100)}] | min_by(.p) | select(. != null) | "\(.n) \(.p | round)%"' }
+
+booklore:
+  needs: [username, password]
+  headers: { Authorization: "Bearer {token}" }
+  login: { path: /api/v1/auth/login, method: POST, json: { username: "{username}", password: "{password}" }, token: .accessToken }
+  requests:
+    libraries: /api/v1/libraries
+    books: /api/v1/books
+  fields:
+    - { label: Libraries, value: ".libraries | length" }
+    - { label: Books, value: ".books | length" }
+    - { label: Reading, value: '[.books[] | select((.readStatus // "") | ascii_upcase == "READING")] | length' }
+    - { label: Finished, value: '[.books[] | select((.readStatus // "") | ascii_upcase == "READ")] | length' }
+
+# interval: day, week (default), month (30 days), year or all.
+yourspotify:
+  needs: [key]
+  defaults: { interval: week }
+  computed:
+    since: 'if $options.interval == "all" then "2006-04-23T00:00:00.000Z" else now - ({day: 86400, week: 604800, month: 2592000, year: 31536000}[$options.interval] // 604800) | strftime("%Y-%m-%dT%H:%M:%S.000Z") end'
+  requests:
+    songs: /spotify/songs_per?token={key}&start={since}&timeSplit=all
+    time: /spotify/time_per?token={key}&start={since}&timeSplit=all
+    artists: /spotify/different_artists_per?token={key}&start={since}&timeSplit=all
+  fields:
+    - { label: Songs, value: ".songs[0].count // 0" }
+    - { label: Time, format: duration, value: "(.time[0].count // 0) / 1000" }
+    - { label: Artists, value: "(.artists[0].artists // []) | length" }
+
+# Set the widget url to https://dev.azure.com. password: a personal access token;
+# username: any value (it is ignored). Latest build of a pipeline and branch
+# (branchName like refs/heads/main). Pull request stats need repositoryId and userEmail.
+azuredevops:
+  needs: [organization, project, definitionId, branchName, username, password]
+  defaults: { repositoryId: "", userEmail: "" }
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    builds: /{organization}/{project}/_apis/build/Builds?branchName={branchName}&definitions={definitionId}&$top=1&api-version=7.0
+    prs: { path: "/{organization}/{project}/_apis/git/repositories/{repositoryId}/pullrequests?api-version=7.0", optional: true }
+  fields:
+    - { label: Result, format: text, value: ".builds.value[0] | .result // .status" }
+    - { label: Total PRs, value: ".prs.count" }
+    - { label: My PRs, value: '[.prs.value[] | select((.createdBy.uniqueName | ascii_downcase) == ($options.userEmail | ascii_downcase))] | length' }
+    - { label: Approved, value: '[.prs.value[] | select((.createdBy.uniqueName | ascii_downcase) == ($options.userEmail | ascii_downcase)) | select([.reviewers[] | select(.vote == 5 or .vote == 10)] | length > 0)] | length' }
+
+pterodactyl:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    nodes: /api/application/nodes?include=servers
+  fields:
+    - { label: Nodes, value: ".nodes.data | length" }
+    - { label: Servers, value: "[.nodes.data[] | (.attributes.relationships.servers.data // []) | length] | add // 0" }
+
+freshrss:
+  needs: [username, password]
+  headers: { Authorization: "GoogleLogin auth={token}" }
+  login: { path: /api/greader.php/accounts/ClientLogin, method: POST, form: { Email: "{username}", Passwd: "{password}" }, token: 'capture("Auth=(?<t>.+)").t' }
+  requests:
+    subs: /api/greader.php/reader/api/0/subscription/list?output=json
+    unread: /api/greader.php/reader/api/0/unread-count?output=json
+  fields:
+    - { label: Unread, value: .unread.max }
+    - { label: Subscriptions, value: "(.subs.subscriptions // []) | length" }
+
+filebrowser:
+  needs: [username, password]
+  headers: { X-AUTH: "{token}" }
+  login: { path: /api/login, method: POST, json: { username: "{username}", password: "{password}" }, token: . }
+  requests:
+    usage: /api/usage
+  fields:
+    - { label: Available, format: bytes, value: "(.usage.total // 0) - (.usage.used // 0)" }
+    - { label: Used, format: bytes, value: ".usage.used // 0" }
+    - { label: Total, format: bytes, value: ".usage.total // 0" }
+
+# Current month. Net worth is the first currency reported by Firefly III.
+firefly:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  computed:
+    month_start: 'now | strftime("%Y-%m-01")'
+    month_end: '(now | strftime("%Y-%m-01T00:00:00Z") | fromdateiso8601) + 32 * 86400 | strftime("%Y-%m-01T00:00:00Z") | fromdateiso8601 | . - 86400 | strftime("%Y-%m-%d")'
+  requests:
+    summary: { path: /api/v1/summary/basic, query: { start: "{month_start}", end: "{month_end}" } }
+    budgets: { path: /api/v1/available-budgets, query: { start: "{month_start}", end: "{month_end}" } }
+  fields:
+    - { label: Net Worth, format: text, value: '[.summary | to_entries[] | select(.key | contains("net-worth-in")) | .value.value_parsed][0]' }
+    - { label: Budget, format: text, value: '.budgets.data[0] | select(.type == "available_budgets") | .attributes | "\(.currency_symbol) \((-((.spent_in_budgets[0].sum // "0") | tonumber) * 100 | round) / 100) / \(.currency_symbol) \((.amount | tonumber * 100 | round) / 100)"' }

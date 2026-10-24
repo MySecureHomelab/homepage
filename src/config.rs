@@ -1,3 +1,4 @@
+use crate::widgets::{self, Definition, WidgetConfig};
 use serde::Deserialize;
 use std::{collections::BTreeMap, fs, path::Path};
 
@@ -28,6 +29,9 @@ pub struct Config {
     /// Discover services from Kubernetes Ingresses (in-cluster config or `~/.kube/config`).
     #[serde(default)]
     pub kubernetes: bool,
+    /// Extra widget definitions, same format as the built-in ones in `widgets/*.yaml`.
+    #[serde(default)]
+    pub widget_types: BTreeMap<String, Definition>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq)]
@@ -75,6 +79,7 @@ pub struct Service {
     /// `http(s)://…` (up if the server answers without a 5xx), `tcp://host:port`,
     /// or `docker://<docker host name>/<container>` (up if running and not unhealthy).
     pub check: Option<String>,
+    pub widget: Option<WidgetConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +159,21 @@ impl Config {
                 .is_some_and(|(host, name)| self.docker.contains_key(host) && !name.is_empty())
     }
 
+    /// Also used for discovered services.
+    pub fn validate_service(&self, s: &Service) -> Result<(), String> {
+        if let Some(c) = &s.check
+            && !self.valid_check(c)
+        {
+            return Err(format!(
+                "check must be http(s)://…, tcp://host:port or docker://<docker host>/<container>, got {c:?}"
+            ));
+        }
+        if let Some(w) = &s.widget {
+            widgets::validate(&self.widget_types, w, s.url.is_some())?;
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<(), String> {
         let hex = self.accent.len() == 7
             && self.accent.starts_with('#')
@@ -183,23 +203,73 @@ impl Config {
                 ));
             }
         }
+        for (name, def) in &self.widget_types {
+            def.validate()
+                .map_err(|e| format!("widget_types.{name}: {e}"))?;
+        }
         for (gi, g) in self.groups.iter().enumerate() {
             for (si, s) in g.services.iter().enumerate() {
-                let Some(c) = &s.check else { continue };
-                if !self.valid_check(c) {
-                    return Err(format!(
-                        "groups[{gi}].services[{si}] ({}): check must be http(s)://…, tcp://host:port or docker://<docker host>/<container>, got {c:?}",
-                        s.name
-                    ));
-                }
+                let at = format!("groups[{gi}].services[{si}] ({})", s.name);
+                self.validate_service(s).map_err(|e| format!("{at}: {e}"))?;
             }
         }
         Ok(())
     }
 }
 
+/// Expands `${NAME}` (environment variable) and `${file:/path}` (file contents, trimmed),
+/// so secrets stay out of the config file. YAML comments are left alone.
+fn substitute(raw: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(raw.len());
+    for (n, line) in raw.split_inclusive('\n').enumerate() {
+        let (code, comment) = line.split_at(comment_start(line));
+        out.push_str(&substitute_line(code).map_err(|e| format!("line {}: {e}", n + 1))?);
+        out.push_str(comment);
+    }
+    Ok(out)
+}
+
+/// Byte offset of a YAML comment (`#` at line start or after whitespace, outside quotes).
+fn comment_start(line: &str) -> usize {
+    let mut quote = None;
+    let mut prev = ' ';
+    for (i, c) in line.char_indices() {
+        match (quote, c) {
+            (None, '\'' | '"') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, '#') if prev.is_whitespace() => return i,
+            _ => {}
+        }
+        prev = c;
+    }
+    line.len()
+}
+
+fn substitute_line(line: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = rest.find("${") {
+        let end = rest[start..].find('}').ok_or("unclosed ${")?;
+        let name = &rest[start + 2..start + end];
+        let value = match name.strip_prefix("file:") {
+            Some(file) => fs::read_to_string(file)
+                .map_err(|e| format!("${{{name}}}: {e}"))?
+                .trim()
+                .to_string(),
+            None => std::env::var(name)
+                .map_err(|_| format!("${{{name}}}: environment variable is not set"))?,
+        };
+        out.push_str(&rest[..start]);
+        out.push_str(&value);
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 pub fn load(path: &Path) -> Result<Config, String> {
     let raw = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let raw = substitute(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
     let cfg: Config =
         serde_saphyr::from_str(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
     cfg.validate()
@@ -219,6 +289,49 @@ mod tests {
     #[test]
     fn example_config_is_valid() {
         load(Path::new("config.example.yaml")).unwrap();
+    }
+
+    #[test]
+    fn substitution() {
+        // SAFETY: test-only, no other thread reads this variable.
+        unsafe { std::env::set_var("HP_TEST_KEY", "s3cret") };
+        assert_eq!(substitute("key: ${HP_TEST_KEY}").unwrap(), "key: s3cret");
+        assert!(
+            substitute("key: ${HP_TEST_UNSET}")
+                .unwrap_err()
+                .contains("HP_TEST_UNSET")
+        );
+        assert_eq!(substitute("no vars {here}").unwrap(), "no vars {here}");
+        let commented =
+            "a: 1 # ${HP_TEST_UNSET}\n# key: ${HP_TEST_UNSET}\nb: \"#${HP_TEST_KEY}\"\n";
+        assert_eq!(
+            substitute(commented).unwrap(),
+            "a: 1 # ${HP_TEST_UNSET}\n# key: ${HP_TEST_UNSET}\nb: \"#s3cret\"\n"
+        );
+        assert!(
+            substitute("a: 1\nb: ${HP_TEST_UNSET}")
+                .unwrap_err()
+                .starts_with("line 2:")
+        );
+    }
+
+    #[test]
+    fn widgets() {
+        let ok = "groups: [{name: a, services: [{name: b, url: 'http://s', widget: {type: sonarr, key: k}}]}]";
+        assert!(parse(ok).is_ok());
+        let cases = [
+            ("{type: nope, key: k}", "unknown widget type"),
+            ("{type: sonarr}", "missing option `key`"),
+            ("{type: sonarr, key: k, kye: k}", "unknown option `kye`"),
+            ("{type: sonarr, key: k, fields: [Nope]}", "unknown field"),
+        ];
+        for (widget, err) in cases {
+            let yaml = format!(
+                "groups: [{{name: a, services: [{{name: b, url: 'http://s', widget: {widget}}}]}}]"
+            );
+            let e = parse(&yaml).unwrap_err();
+            assert!(e.contains(err), "{widget}: {e}");
+        }
     }
 
     #[test]

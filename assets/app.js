@@ -55,7 +55,30 @@ function setStat(key, text, ratio) {
   });
 }
 
-function render({ status, resources: r }) {
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+// Values come from third-party APIs: built with textContent, never innerHTML.
+function renderStats(widgets) {
+  $$('[data-widget]').forEach((box) => {
+    const w = widgets[box.dataset.widget];
+    if (!w) return;
+    const nodes = w.fields.map(([label, value]) => {
+      const block = el('span', 'block');
+      block.append(el('b', '', value), el('span', '', label));
+      return block;
+    });
+    if (w.error) nodes.unshift(el('span', 'stats-error', w.error));
+    box.replaceChildren(...nodes);
+  });
+}
+
+function render({ status, widgets, resources: r }) {
+  renderStats(widgets);
   $$('[data-check]').forEach((el) => {
     const s = status[el.dataset.check];
     el.classList.toggle('up', !!s?.up);

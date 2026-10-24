@@ -48,13 +48,25 @@
     <h2>{{ g.name }}</h2>
     <div class="services">
     {% for s in g.services %}
-      {% if let Some(url) = s.url %}<a class="card" href="{{ url }}">{% else %}<div class="card">{% endif %}
-        {% if let Some(src) = s.icon_src() %}<img src="{{ src }}" alt="" loading="lazy">{% endif %}
-        <div class="text">
-          <div class="name">{{ s.name }}</div>
-          {% if let Some(d) = s.description %}<div class="desc">{{ d }}</div>{% endif %}
+      {% if let Some(url) = s.url %}<a class="card service" href="{{ url }}">{% else %}<div class="card service">{% endif %}
+        <div class="row">
+          {% if let Some(src) = s.icon_src() %}<img src="{{ src }}" alt="" loading="lazy">{% endif %}
+          <div class="text">
+            <div class="name">{{ s.name }}</div>
+            {% if let Some(d) = s.description %}<div class="desc">{{ d }}</div>{% endif %}
+          </div>
+          {% if let Some(c) = s.check %}<span class="status" data-check="{{ c }}" title="Checking…"><span class="ms"></span><span class="dot"></span></span>{% endif %}
         </div>
-        {% if let Some(c) = s.check %}<span class="status" data-check="{{ c }}" title="Checking…"><span class="ms"></span><span class="dot"></span></span>{% endif %}
+        {% if s.widget.is_some() %}
+        <div class="stats" data-widget="{{ g.name }}/{{ s.name }}">
+          {% if let Some(st) = self.stats(g.name.as_str(), s.name.as_str()) %}
+            {% if let Some(e) = st.error %}<span class="stats-error">{{ e }}</span>{% endif %}
+            {% for (label, value) in st.fields %}<span class="block"><b>{{ value }}</b><span>{{ label }}</span></span>{% endfor %}
+          {% else %}
+            <span class="stats-loading">Loading…</span>
+          {% endif %}
+        </div>
+        {% endif %}
       {% if s.url.is_some() %}</a>{% else %}</div>{% endif %}
     {% endfor %}
     </div>

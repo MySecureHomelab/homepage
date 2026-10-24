@@ -1,4 +1,4 @@
-use crate::State;
+use crate::{State, widgets};
 use actix_web::web;
 use serde::Serialize;
 use std::{
@@ -45,16 +45,26 @@ async fn check(client: reqwest::Client, target: String) -> (String, Status) {
     (target, Status { up, ms: Some(ms) })
 }
 
+pub fn widget_key(group: &str, service: &str) -> String {
+    format!("{group}/{service}")
+}
+
+enum Outcome {
+    Check(String, Status),
+    Widget(String, widgets::Stats),
+}
+
 pub async fn run_checks(state: web::Data<State>) {
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
         .build()
         .expect("http client");
+    let fetcher = std::sync::Arc::new(widgets::Fetcher::new());
     loop {
         let (cfg, _) = state.config();
         // docker:// states come straight from discovery, see `api_state`.
-        let targets: HashSet<String> = state
-            .groups(&cfg)
+        let groups = state.groups(&cfg);
+        let targets: HashSet<String> = groups
             .iter()
             .flat_map(|g| &g.services)
             .filter_map(|s| s.check.clone())
@@ -69,11 +79,38 @@ pub async fn run_checks(state: web::Data<State>) {
             .retain(|t, _| targets.contains(t));
         let mut set = JoinSet::new();
         for t in targets {
-            set.spawn(check(client.clone(), t));
+            let client = client.clone();
+            set.spawn(async move {
+                let (t, s) = check(client, t).await;
+                Outcome::Check(t, s)
+            });
         }
+        let mut keys = HashSet::new();
+        for g in &groups {
+            for s in &g.services {
+                let Some(w) = &s.widget else { continue };
+                let Some(def) = widgets::lookup(&cfg.widget_types, &w.kind).cloned() else {
+                    continue;
+                };
+                let key = widget_key(&g.name, &s.name);
+                keys.insert(key.clone());
+                let (fetcher, w, url) = (fetcher.clone(), w.clone(), s.url.clone());
+                set.spawn(async move {
+                    let result = fetcher.fetch(&key, &def, &w, url.as_deref()).await;
+                    Outcome::Widget(key, result)
+                });
+            }
+        }
+        state
+            .widgets
+            .write()
+            .unwrap()
+            .retain(|k, _| keys.contains(k));
         while let Some(r) = set.join_next().await {
-            if let Ok((t, s)) = r {
-                state.status.write().unwrap().insert(t, s);
+            match r {
+                Ok(Outcome::Check(t, s)) => drop(state.status.write().unwrap().insert(t, s)),
+                Ok(Outcome::Widget(k, s)) => drop(state.widgets.write().unwrap().insert(k, s)),
+                Err(_) => {}
             }
         }
         // Sleep until the next tick, or until a config reload asks for a fresh round.

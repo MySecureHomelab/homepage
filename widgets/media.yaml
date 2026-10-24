@@ -1,0 +1,254 @@
+# Media servers, libraries, photos and transcoding.
+# Each entry: needs (required options), headers, optional login, named requests,
+# and fields computed with jq over {"<request name>": <response>}. See src/widgets.rs.
+
+jellyfin:
+  needs: [key]
+  headers: { Authorization: 'MediaBrowser Token="{key}", Client="Homepage", Device="Homepage", DeviceId="homepage", Version="1.0.0"' }
+  requests:
+    sessions: /Sessions
+    counts: /Items/Counts
+  fields:
+    - { label: Playing, value: "[.sessions[] | select(.NowPlayingItem)] | length" }
+    - { label: Movies, value: .counts.MovieCount }
+    - { label: Series, value: .counts.SeriesCount }
+    - { label: Episodes, value: .counts.EpisodeCount }
+    - { label: Songs, value: .counts.SongCount }
+    - { label: Albums, value: .counts.AlbumCount }
+
+emby:
+  needs: [key]
+  headers: { X-Emby-Token: "{key}" }
+  requests:
+    sessions: /emby/Sessions
+    counts: /emby/Items/Counts
+  fields:
+    - { label: Playing, value: "[.sessions[] | select(.NowPlayingItem)] | length" }
+    - { label: Movies, value: .counts.MovieCount }
+    - { label: Series, value: .counts.SeriesCount }
+    - { label: Episodes, value: .counts.EpisodeCount }
+    - { label: Songs, value: .counts.SongCount }
+
+plex:
+  needs: [key]
+  headers: { Accept: application/json, X-Plex-Token: "{key}" }
+  requests:
+    sessions: /status/sessions
+    sections: /library/sections
+    movies:
+      path: /library/sections/{item}/all
+      query: { X-Plex-Container-Size: "0" }
+      each: '[.sections.MediaContainer.Directory[]? | select(.type == "movie") | .key]'
+    shows:
+      path: /library/sections/{item}/all
+      query: { X-Plex-Container-Size: "0" }
+      each: '[.sections.MediaContainer.Directory[]? | select(.type == "show") | .key]'
+    albums:
+      path: /library/sections/{item}/albums
+      query: { X-Plex-Container-Size: "0" }
+      each: '[.sections.MediaContainer.Directory[]? | select(.type == "artist") | .key]'
+  fields:
+    - { label: Active Streams, value: ".sessions.MediaContainer.size // 0" }
+    - { label: Albums, value: "[.albums[].MediaContainer | (.totalSize // .size // 0)] | add // 0" }
+    - { label: Movies, value: "[.movies[].MediaContainer | (.totalSize // .size // 0)] | add // 0" }
+    - { label: TV Shows, value: "[.shows[].MediaContainer | (.totalSize // .size // 0)] | add // 0" }
+
+# Tautulli takes its key in the query string.
+tautulli:
+  needs: [key]
+  requests:
+    activity: { path: /api/v2, query: { apikey: "{key}", cmd: get_activity } }
+  fields:
+    - { label: Playing, value: ".activity.response.data.stream_count | tonumber? // 0" }
+    - { label: Transcoding, value: ".activity.response.data.stream_count_transcode | tonumber? // 0" }
+    - { label: Bitrate, value: "(.activity.response.data.total_bandwidth | tonumber? // 0) * 1000", format: bitrate }
+
+# Views over the last `days` days.
+jellystat:
+  needs: [key]
+  defaults: { days: "30" }
+  headers: { X-API-Token: "{key}" }
+  requests:
+    views: { path: /stats/getViewsByLibraryType, query: { days: "{days}" } }
+  fields:
+    - { label: Songs, value: .views.Audio // 0 }
+    - { label: Movies, value: .views.Movie // 0 }
+    - { label: Episodes, value: .views.Series // 0 }
+    - { label: Other, value: .views.Other // 0 }
+
+# Subsonic API: the password goes in the query string (token/salt auth cannot be computed here).
+navidrome:
+  needs: [username, password]
+  requests:
+    nowplaying: { path: /rest/getNowPlaying, query: { u: "{username}", p: "{password}", v: 1.16.1, c: homepage, f: json } }
+  fields:
+    - { label: Now Playing, value: '(.nowplaying["subsonic-response"].nowPlaying.entry // []) | if type == "array" then length else 1 end' }
+
+audiobookshelf:
+  needs: [key]
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    libraries: /api/libraries
+    books:
+      path: /api/libraries/{item}/stats
+      each: '[.libraries.libraries[]? | select(.mediaType == "book") | .id]'
+    podcasts:
+      path: /api/libraries/{item}/stats
+      each: '[.libraries.libraries[]? | select(.mediaType == "podcast") | .id]'
+  fields:
+    - { label: Podcasts, value: "[.podcasts[].totalItems | tonumber? // 0] | add // 0" }
+    - { label: Duration, value: "[.podcasts[].totalDuration | tonumber? // 0] | add // 0", format: duration }
+    - { label: Books, value: "[.books[].totalItems | tonumber? // 0] | add // 0" }
+    - { label: Duration, value: "[.books[].totalDuration | tonumber? // 0] | add // 0", format: duration }
+
+# Basic auth (username + password) or API key.
+komga:
+  headers:
+    Authorization: "Basic {basic}"
+    X-API-Key: "{key}"
+  requests:
+    libraries: /api/v1/libraries
+    series: { path: "/api/v1/series/list?size=1", method: POST, json: {} }
+    books: { path: "/api/v1/books/list?size=1", method: POST, json: {} }
+  fields:
+    - { label: Libraries, value: "[.libraries[] | select(.unavailable | not)] | length" }
+    - { label: Series, value: .series.totalElements }
+    - { label: Books, value: .books.totalElements }
+
+kavita:
+  needs: [key]
+  login: { path: /api/Account/login, method: POST, json: { username: "", password: "", apiKey: "{key}" }, token: .token }
+  headers: { Authorization: "Bearer {token}" }
+  requests:
+    stats: /api/Stats/server/stats
+  fields:
+    - { label: Series, value: .stats.seriesCount }
+    - { label: Files, value: .stats.totalFiles }
+
+calibreweb:
+  needs: [username, password]
+  headers: { Authorization: "Basic {basic}" }
+  requests:
+    stats: /opds/stats
+  fields:
+    - { label: Books, value: .stats.books }
+    - { label: Authors, value: .stats.authors }
+    - { label: Categories, value: .stats.categories }
+    - { label: Series, value: .stats.series }
+
+# Immich >= v1.118 (needs an API key with the server.statistics permission).
+immich:
+  needs: [key]
+  headers: { x-api-key: "{key}" }
+  requests:
+    stats: /api/server/statistics
+  fields:
+    - { label: Users, value: "(.stats.usageByUser // []) | length" }
+    - { label: Photos, value: .stats.photos }
+    - { label: Videos, value: .stats.videos }
+    - { label: Storage, value: .stats.usage, format: bytes }
+
+# Authenticates with an app password / access token (`key`) or username + password.
+photoprism:
+  headers: { Authorization: "Bearer {key}" }
+  requests:
+    session: { path: /api/v1/session, method: POST, json: { authToken: "{key}", username: "{username}", password: "{password}" } }
+  fields:
+    - { label: Albums, value: .session.config.count.albums }
+    - { label: Photos, value: .session.config.count.photos }
+    - { label: Videos, value: .session.config.count.videos }
+    - { label: People, value: .session.config.count.people }
+
+# `key` is optional.
+tdarr:
+  headers: { x-api-key: "{key}" }
+  requests:
+    stats:
+      path: /api/v2/cruddb
+      method: POST
+      json: { data: { collection: StatisticsJSONDB, mode: getById, docID: statistics } }
+  fields:
+    - { label: Queue, value: "((.stats.table1ViewableCount | select(. != 0)) // .stats.table1Count // 0) + ((.stats.table4ViewableCount | select(. != 0)) // .stats.table4Count // 0)" }
+    - { label: Processed, value: "((.stats.table2ViewableCount | select(. != 0)) // .stats.table2Count // 0) + ((.stats.table5ViewableCount | select(. != 0)) // .stats.table5Count // 0)" }
+    - { label: Errored, value: "((.stats.table3ViewableCount | select(. != 0)) // .stats.table3Count // 0) + ((.stats.table6ViewableCount | select(. != 0)) // .stats.table6Count // 0)" }
+    - { label: Saved, value: "(.stats.sizeDiff | tonumber? // 0) * 1000000000", format: bytes }
+
+unmanic:
+  requests:
+    workers: /unmanic/api/v2/workers/status
+    pending: { path: /unmanic/api/v2/pending/tasks, method: POST, json: {} }
+  fields:
+    - { label: Active Workers, value: "[(.workers.workers_status // [])[] | select(.idle | not)] | length" }
+    - { label: Total Workers, value: "(.workers.workers_status // []) | length" }
+    - { label: Queue Length, value: .pending.recordsTotal }
+
+# `key` is optional (only when Stash has login credentials).
+stash:
+  headers: { ApiKey: "{key}" }
+  requests:
+    stats:
+      path: /graphql
+      method: POST
+      json:
+        query: "{ stats { scene_count scenes_size scenes_duration image_count images_size gallery_count performer_count studio_count movie_count tag_count total_o_count total_play_duration total_play_count scenes_played } }"
+  fields:
+    - { label: Scenes, value: .stats.data.stats.scene_count }
+    - { label: Scenes Played, value: .stats.data.stats.scenes_played }
+    - { label: Total Plays, value: .stats.data.stats.total_play_count }
+    - { label: Time Watched, value: .stats.data.stats.total_play_duration, format: duration }
+    - { label: Scenes Size, value: .stats.data.stats.scenes_size, format: bytes }
+    - { label: Scenes Duration, value: .stats.data.stats.scenes_duration, format: duration }
+    - { label: Images, value: .stats.data.stats.image_count }
+    - { label: Images Size, value: .stats.data.stats.images_size, format: bytes }
+    - { label: Galleries, value: .stats.data.stats.gallery_count }
+    - { label: Performers, value: .stats.data.stats.performer_count }
+    - { label: Studios, value: .stats.data.stats.studio_count }
+    - { label: Movies, value: .stats.data.stats.movie_count }
+    - { label: Tags, value: .stats.data.stats.tag_count }
+    - { label: O Count, value: .stats.data.stats.total_o_count }
+
+tubearchivist:
+  needs: [key]
+  headers: { Authorization: "Token {key}" }
+  requests:
+    downloads: /api/stats/download
+    videos: /api/stats/video
+    channels: /api/stats/channel
+    playlists: /api/stats/playlist
+  fields:
+    - { label: Queue, value: .downloads.pending // 0 }
+    - { label: Videos, value: .videos.doc_count // 0 }
+    - { label: Channels, value: .channels.doc_count // 0 }
+    - { label: Playlists, value: .playlists.doc_count // 0 }
+
+channelsdvrserver:
+  requests:
+    status: /dvr
+  fields:
+    - { label: Shows, value: .status.stats.groups }
+    - { label: Recordings, value: .status.stats.files }
+    - { label: Scheduled, value: .status.stats.jobs }
+    - { label: Passes, value: .status.stats.rules }
+
+# FileFlows >= 26.10 via the "Fenrus Dashboard Endpoint" (enable it in settings; its token is the key).
+fileflows:
+  needs: [key]
+  headers: { X-Webhook-Token: "{key}" }
+  requests:
+    status: /webhook/fenrus
+  fields:
+    - { label: Queue, value: .status.Unprocessed }
+    - { label: Processing, value: .status.Processing }
+    - { label: Processed, value: .status.Processed }
+    - { label: Failed, value: .status.Failed }
+
+romm:
+  requests:
+    stats: /api/stats
+  fields:
+    - { label: Platforms, value: .stats.PLATFORMS }
+    - { label: Games, value: .stats.ROMS }
+    - { label: Saves, value: .stats.SAVES }
+    - { label: States, value: .stats.STATES }
+    - { label: Screenshots, value: .stats.SCREENSHOTS }
+    - { label: Total Size, value: .stats.FILESIZE // .stats.TOTAL_FILESIZE_BYTES, format: bytes }

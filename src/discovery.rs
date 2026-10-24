@@ -4,6 +4,7 @@
 use crate::{
     State,
     config::{Config, Group, Service},
+    widgets::WidgetConfig,
 };
 use actix_web::web;
 use bollard::{
@@ -24,9 +25,32 @@ const INTERVAL: Duration = Duration::from_secs(15);
 /// A discovered service and the group it goes in.
 pub type Found = (String, Service);
 
+/// `<prefix>type`, `<prefix>url`, `<prefix>fields` (JSON list or comma-separated) and any
+/// other `<prefix><option>` (key, username…) as a widget config.
+fn widget_from<'a>(
+    pairs: impl Iterator<Item = (&'a String, &'a String)>,
+    prefix: &str,
+) -> Option<WidgetConfig> {
+    let mut options: BTreeMap<String, String> = pairs
+        .filter_map(|(k, v)| Some((k.strip_prefix(prefix)?.to_string(), v.clone())))
+        .collect();
+    let kind = options.remove("type")?;
+    let fields = options.remove("fields").map(|f| {
+        serde_json::from_str(&f)
+            .unwrap_or_else(|_| f.split(',').map(|s| s.trim().to_string()).collect())
+    });
+    Some(WidgetConfig {
+        kind,
+        url: options.remove("url"),
+        fields,
+        options,
+    })
+}
+
 /// Docker labels: `homepage.name` opts a container in; `homepage.group`, `homepage.url`
 /// (or `homepage.href`), `homepage.icon`, `homepage.description`, `homepage.check` are optional.
 /// Without `homepage.check`, the service is up when its container is running.
+/// `homepage.widget.type`, `homepage.widget.key`… add a widget.
 pub fn from_labels(labels: &HashMap<String, String>, container_check: &str) -> Option<Found> {
     let get = |k: &str| labels.get(&format!("homepage.{k}")).cloned();
     let service = Service {
@@ -35,6 +59,7 @@ pub fn from_labels(labels: &HashMap<String, String>, container_check: &str) -> O
         icon: get("icon"),
         description: get("description"),
         check: Some(get("check").unwrap_or_else(|| container_check.into())),
+        widget: widget_from(labels.iter(), "homepage.widget."),
     };
     Some((get("group").unwrap_or_else(|| "Docker".into()), service))
 }
@@ -70,6 +95,7 @@ pub fn from_ingress(ing: &Ingress) -> Option<Found> {
         url,
         icon: get("icon"),
         description: get("description"),
+        widget: widget_from(annotations.iter(), "gethomepage.dev/widget."),
     };
     Some((get("group").unwrap_or_else(|| "Kubernetes".into()), service))
 }
@@ -210,7 +236,7 @@ pub async fn run(state: web::Data<State>) {
     }
 }
 
-/// Flatten sources into a stable order and drop checks the config would reject.
+/// Flatten sources into a stable order and drop checks and widgets the config would reject.
 fn collect(
     cfg: &Config,
     sources: &BTreeMap<String, Vec<Found>>,
@@ -223,6 +249,12 @@ fn collect(
         {
             errors.push(format!("{}: ignoring invalid check {c:?}", s.name));
             s.check = None;
+        }
+        if let Some(w) = &s.widget
+            && let Err(e) = crate::widgets::validate(&cfg.widget_types, w, s.url.is_some())
+        {
+            errors.push(format!("{}: ignoring widget: {e}", s.name));
+            s.widget = None;
         }
     }
     found.sort_by(|a, b| (&a.0, &a.1.name).cmp(&(&b.0, &b.1.name)));
@@ -250,6 +282,9 @@ mod tests {
             ("homepage.name", "Jellyfin"),
             ("homepage.href", "https://jf.lan"),
             ("homepage.icon", "jellyfin"),
+            ("homepage.widget.type", "jellyfin"),
+            ("homepage.widget.key", "abc"),
+            ("homepage.widget.fields", r#"["Movies", "Series"]"#),
         ]
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .into();
@@ -257,6 +292,12 @@ mod tests {
         assert_eq!(group, "Docker");
         assert_eq!(s.url.as_deref(), Some("https://jf.lan"));
         assert_eq!(s.check.as_deref(), Some("docker://local/jellyfin"));
+        let w = s.widget.unwrap();
+        assert_eq!(
+            (w.kind.as_str(), w.options["key"].as_str()),
+            ("jellyfin", "abc")
+        );
+        assert_eq!(w.fields.unwrap(), ["Movies", "Series"]);
         assert!(
             from_labels(&HashMap::new(), "x").is_none(),
             "unlabelled containers stay hidden"
