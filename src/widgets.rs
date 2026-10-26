@@ -131,6 +131,16 @@ pub struct Login {
 #[serde(deny_unknown_fields)]
 pub struct Field {
     pub label: String,
+    /// The gethomepage name of this field (`wanted`, `blocked_percent`…), so `fields` lists
+    /// written for gethomepage select the same fields.
+    pub key: Option<String>,
+    /// Only shown when the user lists it in `fields` (gethomepage shows a subset by default).
+    #[serde(default)]
+    pub hidden: bool,
+    /// jq over the responses (like `value`, with `$options`): when false or null, the field is
+    /// hidden like `hidden: true`. For fields that only apply to one mode
+    /// (`'$options.version == "2"'`) or one state (`'.status.state == "printing"'`).
+    pub when: Option<String>,
     /// jq over the object of responses.
     pub value: String,
     #[serde(default)]
@@ -158,17 +168,50 @@ pub enum Format {
 }
 
 /// What a user writes under `widget:` on a service.
-#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Default)]
+#[serde(from = "RawWidget")]
 pub struct WidgetConfig {
-    #[serde(rename = "type")]
     pub kind: String,
     /// Defaults to the service URL.
     pub url: Option<String>,
-    /// Labels to show, in order. Defaults to all fields of the definition.
+    /// Labels (or gethomepage keys) to show, in order. Defaults to all fields of the definition.
     pub fields: Option<Vec<String>>,
     /// `key`, `username`, `password`, and whatever else the definition uses.
-    #[serde(flatten)]
     pub options: BTreeMap<String, String>,
+    /// Options that are lists or maps (gethomepage display settings), reported and left out.
+    pub ignored: Vec<String>,
+}
+
+/// Option values may be numbers or booleans (`enableQueue: true`): they are used as strings.
+#[derive(Deserialize)]
+struct RawWidget {
+    #[serde(rename = "type")]
+    kind: String,
+    url: Option<String>,
+    fields: Option<Vec<String>>,
+    #[serde(flatten)]
+    options: BTreeMap<String, serde_json::Value>,
+}
+
+impl From<RawWidget> for WidgetConfig {
+    fn from(raw: RawWidget) -> Self {
+        let mut w = WidgetConfig {
+            kind: raw.kind,
+            url: raw.url,
+            fields: raw.fields,
+            ..Default::default()
+        };
+        for (k, v) in raw.options {
+            match v {
+                serde_json::Value::String(s) => drop(w.options.insert(k, s)),
+                serde_json::Value::Number(_) | serde_json::Value::Bool(_) => {
+                    drop(w.options.insert(k, v.to_string()));
+                }
+                _ => w.ignored.push(k),
+            }
+        }
+        w
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -192,6 +235,16 @@ fn placeholders(s: &str) -> impl Iterator<Item = &str> {
 }
 
 impl Definition {
+    /// A field by label or gethomepage key, ignoring case.
+    pub fn field(&self, name: &str) -> Option<&Field> {
+        self.fields.iter().find(|f| {
+            f.label.eq_ignore_ascii_case(name)
+                || f.key
+                    .as_deref()
+                    .is_some_and(|k| k.eq_ignore_ascii_case(name))
+        })
+    }
+
     fn templates(&self) -> Vec<String> {
         fn add(out: &mut Vec<String>, r: &FullRequest) {
             out.push(r.path.clone());
@@ -221,7 +274,12 @@ impl Definition {
 
     /// Option names the definition can use.
     fn options(&self) -> BTreeSet<String> {
-        let built_in = ["url", "token", "basic", "item"];
+        // Without a login step, `token` is an ordinary option (e.g. Navidrome's token).
+        let built_in: &[&str] = if self.login.is_some() {
+            &["url", "token", "basic", "item"]
+        } else {
+            &["url", "basic", "item"]
+        };
         let mut options: BTreeSet<String> = self
             .templates()
             .iter()
@@ -253,14 +311,6 @@ impl Definition {
         {
             return Err("login: set exactly one of token, cookie, header".into());
         }
-        if login.is_none()
-            && self
-                .templates()
-                .iter()
-                .any(|t| placeholders(t).any(|p| p == "token"))
-        {
-            return Err("{token} is only available with a login step".into());
-        }
         let each = self.requests.values().filter_map(|r| match r {
             Request::Full(f) => f.each.as_ref(),
             Request::Get(_) => None,
@@ -271,6 +321,7 @@ impl Definition {
             .map(|f| &f.value)
             .chain(login.and_then(|l| l.token.as_ref()))
             .chain(login.and_then(|l| l.expired.as_ref()))
+            .chain(self.fields.iter().filter_map(|f| f.when.as_ref()))
             .chain(self.computed.values())
             .chain(each);
         for code in jq {
@@ -280,25 +331,37 @@ impl Definition {
     }
 }
 
-/// Checks a service's widget against its definition.
+/// Checks a service's widget against its definition. `Err` means the widget cannot work (its
+/// card shows the error); `Ok` lists what is ignored (unknown options and fields, e.g. ones
+/// that only exist in gethomepage).
 pub fn validate(
     custom: &BTreeMap<String, Definition>,
     w: &WidgetConfig,
     has_service_url: bool,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let def = lookup(custom, &w.kind).ok_or_else(|| {
-        let known: Vec<&str> = BUILTIN
+        // ponytail: shared-prefix match, edit distance if typos slip through
+        let wanted = w.kind.to_lowercase();
+        let close: Vec<&str> = BUILTIN
             .keys()
             .chain(custom.keys())
             .map(String::as_str)
+            .filter(|k| {
+                k.len() >= 3 && (wanted.starts_with(&k[..3]) || k.contains(wanted.as_str()))
+            })
+            .take(5)
             .collect();
+        let hint = if close.is_empty() {
+            String::new()
+        } else {
+            format!(" (did you mean {}?)", close.join(", "))
+        };
         format!(
-            "unknown widget type {:?}, expected one of: {}",
-            w.kind,
-            known.join(", ")
+            "unknown widget type {:?}{hint}, see docs/widget-types.md",
+            w.kind
         )
     })?;
-    if w.url.is_none() && !has_service_url {
+    if w.url.is_none() && !has_service_url && !def.defaults.contains_key("url") {
         return Err(format!(
             "widget {}: set widget.url or the service url",
             w.kind
@@ -309,30 +372,34 @@ pub fn validate(
             return Err(format!("widget {}: missing option `{need}`", w.kind));
         }
     }
+    let mut warnings: Vec<String> = w
+        .ignored
+        .iter()
+        .map(|o| {
+            format!(
+                "widget {}: option `{o}` ignored (lists and maps are not supported)",
+                w.kind
+            )
+        })
+        .collect();
     let known = def.options();
-    for o in w.options.keys() {
-        if !known.contains(o) {
-            let list: Vec<&str> = known.iter().map(String::as_str).collect();
-            return Err(format!(
-                "widget {}: unknown option `{o}`, expected one of: {}",
-                w.kind,
-                list.join(", ")
-            ));
-        }
+    let list: Vec<&str> = known.iter().map(String::as_str).collect();
+    for o in w.options.keys().filter(|o| !known.contains(*o)) {
+        warnings.push(format!(
+            "widget {}: unknown option `{o}` ignored, expected one of: {}",
+            w.kind,
+            list.join(", ")
+        ));
     }
-    if let Some(fields) = &w.fields {
-        for f in fields {
-            if !def.fields.iter().any(|d| &d.label == f) {
-                let labels: Vec<&str> = def.fields.iter().map(|d| d.label.as_str()).collect();
-                return Err(format!(
-                    "widget {}: unknown field {f:?}, expected one of: {}",
-                    w.kind,
-                    labels.join(", ")
-                ));
-            }
-        }
+    let labels: Vec<&str> = def.fields.iter().map(|d| d.label.as_str()).collect();
+    for f in w.fields.iter().flatten().filter(|f| def.field(f).is_none()) {
+        warnings.push(format!(
+            "widget {}: unknown field {f:?} ignored, expected one of: {}",
+            w.kind,
+            labels.join(", ")
+        ));
     }
-    Ok(())
+    Ok(warnings)
 }
 
 // ---------- templating ----------
@@ -682,9 +749,22 @@ impl Fetcher {
         r: &FullRequest,
         def: &Definition,
         vars: &HashMap<String, String>,
+        misses: &mut Vec<String>,
     ) -> Result<String, Failure> {
         match self.send(name, r, def, vars).await {
-            Err(Failure::Other(_)) if r.optional => Ok("null".into()),
+            // An auth failure with a login is kept, so the login is retried; without a login
+            // there is nothing to retry and a refused optional request is null too.
+            Err(Failure::Other(e)) if r.optional => {
+                // An unset path placeholder is a request skipped on purpose (another mode).
+                if !e.starts_with("missing option") {
+                    misses.push(e);
+                }
+                Ok("null".into())
+            }
+            Err(Failure::Auth(e)) if r.optional && def.login.is_none() => {
+                misses.push(e);
+                Ok("null".into())
+            }
             other => other,
         }
     }
@@ -694,6 +774,7 @@ impl Fetcher {
         &self,
         def: &Definition,
         vars: &HashMap<String, String>,
+        misses: &mut Vec<String>,
     ) -> Result<String, Failure> {
         let mut parts: Vec<(String, String)> = Vec::new();
         let mut later = Vec::new();
@@ -716,7 +797,10 @@ impl Fetcher {
                 }
                 Request::Full(f) => f,
             };
-            parts.push((name.clone(), self.send_or_null(name, r, def, vars).await?));
+            parts.push((
+                name.clone(),
+                self.send_or_null(name, r, def, vars, misses).await?,
+            ));
         }
         for (name, r) in later {
             let items = jq_items(r.each.as_deref().unwrap_or("[]"), &combine(&parts), vars);
@@ -724,7 +808,7 @@ impl Fetcher {
             for item in items {
                 let mut vars = vars.clone();
                 vars.insert("item".into(), item);
-                results.push(self.send_or_null(name, r, def, &vars).await?);
+                results.push(self.send_or_null(name, r, def, &vars, misses).await?);
             }
             parts.push((name.clone(), format!("[{}]", results.join(","))));
         }
@@ -763,7 +847,14 @@ impl Fetcher {
             .into_iter()
             .chain(w.options.clone())
             .collect();
-        let url = w.url.as_deref().or(service_url).ok_or("no url")?;
+        // A fixed API address (`defaults: {url: https://api.tailscale.com}`) wins over the
+        // service url, which then points at the app's web UI.
+        let url = w
+            .url
+            .as_deref()
+            .or(def.defaults.get("url").map(String::as_str))
+            .or(service_url)
+            .ok_or("no url")?;
         vars.insert("url".into(), url.trim_end_matches('/').into());
         if let (Some(u), Some(p)) = (vars.get("username"), vars.get("password")) {
             let basic = BASE64_STANDARD.encode(format!("{u}:{p}"));
@@ -776,6 +867,7 @@ impl Fetcher {
         }
 
         let mut body = Err(Failure::Other(String::new()));
+        let mut misses = Vec::new();
         for attempt in 0..2 {
             if let Some(login) = def.login.as_ref().filter(|l| login_possible(l, &vars)) {
                 let cached = self.tokens.lock().unwrap().get(key).cloned();
@@ -789,7 +881,8 @@ impl Fetcher {
                 };
                 vars.insert("token".into(), token);
             }
-            body = self.get_all(def, &vars).await;
+            misses.clear();
+            body = self.get_all(def, &vars, &mut misses).await;
             match &body {
                 Err(Failure::Auth(_)) if vars.contains_key("token") && attempt == 0 => {
                     self.tokens.lock().unwrap().remove(key);
@@ -798,7 +891,14 @@ impl Fetcher {
             }
         }
         let body = body.map_err(|(Failure::Auth(e) | Failure::Other(e))| e)?;
-        Ok(evaluate(def, w, &body, &vars))
+        let fields = evaluate(def, w, &body, &vars);
+        // Nothing to show and an optional request failed: that failure is the explanation.
+        if let Some(e) = misses.first()
+            && fields.iter().all(|(_, v)| v == "–")
+        {
+            return Err(e.clone());
+        }
+        Ok(fields)
     }
 }
 
@@ -811,11 +911,12 @@ fn evaluate(
 ) -> Vec<(String, String)> {
     let input = jaq_json::read::parse_single(body.as_bytes()).unwrap_or_default();
     let wanted: Vec<&Field> = match &w.fields {
-        Some(labels) => labels
+        Some(labels) => labels.iter().filter_map(|l| def.field(l)).collect(),
+        None => def
+            .fields
             .iter()
-            .filter_map(|l| def.fields.iter().find(|f| &f.label == l))
+            .filter(|f| !f.hidden && f.when.as_ref().is_none_or(|c| jq_truthy(c, body, options)))
             .collect(),
-        None => def.fields.iter().collect(),
     };
     wanted
         .into_iter()
@@ -859,18 +960,29 @@ fn combine(parts: &[(String, String)]) -> String {
 }
 
 /// The login runs only when all its placeholders are set, so auth can be optional.
+/// The login runs when its path is complete and, if its query or body use placeholders, at
+/// least one of those entries is complete: incomplete entries are left out as in any request,
+/// so one login can take alternatives (`{apiKey: "{key}", username: "{username}"…}`), and a
+/// login with none of its credentials set is skipped (auth is optional).
 fn login_possible(login: &Login, vars: &HashMap<String, String>) -> bool {
+    fn leaves(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::String(s) => out.push(s.clone()),
+            serde_json::Value::Array(a) => a.iter().for_each(|x| leaves(x, out)),
+            serde_json::Value::Object(o) => o.values().for_each(|x| leaves(x, out)),
+            _ => {}
+        }
+    }
+    let complete = |t: &str| placeholders(t).all(|p| p == "url" || vars.contains_key(p));
     let r = &login.request;
-    let mut templates = vec![r.path.clone()];
-    templates.extend(r.query.values().cloned());
-    templates.extend(r.form.iter().flat_map(|f| f.values().cloned()));
-    templates.extend(r.json.iter().map(ToString::to_string));
-    templates
-        .iter()
-        .flat_map(|t| placeholders(t).map(String::from).collect::<Vec<_>>())
-        .all(|p| {
-            p == "url" || p == "basic" && vars.contains_key("username") || vars.contains_key(&p)
-        })
+    let mut entries: Vec<String> = r.query.values().cloned().collect();
+    entries.extend(r.form.iter().flat_map(|f| f.values().cloned()));
+    if let Some(j) = &r.json {
+        leaves(j, &mut entries);
+    }
+    let mut with_placeholders = entries.iter().filter(|e| placeholders(e).next().is_some());
+    complete(&r.path)
+        && (with_placeholders.clone().next().is_none() || with_placeholders.any(|e| complete(e)))
 }
 
 fn jq_scalar(code: &str, options: &HashMap<String, String>) -> Option<String> {
@@ -1000,6 +1112,38 @@ mod tests {
     }
 
     #[test]
+    fn login_alternatives() {
+        let kavita = &BUILTIN["kavita"];
+        let login = kavita.login.as_ref().unwrap();
+        let possible = |pairs: &[(&str, &str)]| login_possible(login, &vars(pairs));
+        assert!(possible(&[("url", "u"), ("key", "k")]));
+        assert!(possible(&[
+            ("url", "u"),
+            ("username", "a"),
+            ("password", "b")
+        ]));
+        assert!(!possible(&[("url", "u")]), "no credentials: no login");
+        let header_only: Login = serde_saphyr::from_str("{path: /rpc, header: X-Id}").unwrap();
+        assert!(login_possible(&header_only, &vars(&[("url", "u")])));
+        let in_path: Login = serde_saphyr::from_str("{path: '/login/{key}', token: .t}").unwrap();
+        assert!(!login_possible(&in_path, &vars(&[("url", "u")])));
+        for opts in [
+            vec![("key", "k")],
+            vec![("username", "a"), ("password", "b")],
+        ] {
+            let w = WidgetConfig {
+                kind: "kavita".into(),
+                options: opts
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                ..Default::default()
+            };
+            assert_eq!(validate(&BTreeMap::new(), &w, true), Ok(vec![]));
+        }
+    }
+
+    #[test]
     fn evaluation() {
         let def: Definition = serde_saphyr::from_str(
             r#"
@@ -1014,9 +1158,7 @@ fields:
         def.validate().unwrap();
         let w = WidgetConfig {
             kind: "x".into(),
-            url: None,
-            fields: None,
-            options: BTreeMap::new(),
+            ..Default::default()
         };
         let none = HashMap::new();
         let out = evaluate(
@@ -1067,7 +1209,86 @@ fields:
             "headers: {X: '{token}'}\nrequests: {a: /a}\nfields: [{label: X, value: .a}]",
         )
         .unwrap();
-        assert!(token_no_login.validate().is_err());
+        assert!(
+            token_no_login.options().contains("token"),
+            "a plain option without login"
+        );
+    }
+
+    /// Runs every built-in type against a local server that accepts anything: no definition may
+    /// fail to build its requests (an unset placeholder, a bad body) with only `needs` set.
+    #[actix_web::test]
+    async fn every_builtin_builds_its_requests() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for mut conn in listener.incoming().flatten() {
+                let _ = conn.read(&mut [0; 8192]);
+                let _ = write!(
+                    conn,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nset-cookie: SID=x\r\n\
+                     x-transmission-session-id: x\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}"
+                );
+            }
+        });
+        let fetcher = Fetcher::new();
+        let mut broken = Vec::new();
+        for (name, def) in BUILTIN.iter() {
+            let w = WidgetConfig {
+                kind: name.clone(),
+                url: Some(url.clone()),
+                options: def.needs.iter().map(|n| (n.clone(), "x".into())).collect(),
+                ..Default::default()
+            };
+            // A cached session skips the login, so the requests behind it run too.
+            fetcher
+                .tokens
+                .lock()
+                .unwrap()
+                .insert(name.clone(), "t".into());
+            let stats = fetcher.fetch(name, def, &w, None).await;
+            if let Some(e) = stats.error.filter(|e| e.contains("missing option")) {
+                broken.push(format!("{name}: {e}"));
+            }
+        }
+        assert!(broken.is_empty(), "{broken:#?}");
+    }
+
+    #[test]
+    fn hidden_fields() {
+        let def: Definition = serde_saphyr::from_str(
+            "requests: {a: /a}\nfields: [{label: A, value: .a}, {label: B, value: .a, hidden: true, key: bee}]",
+        )
+        .unwrap();
+        let shown = |fields: Option<Vec<String>>| {
+            let w = WidgetConfig {
+                fields,
+                ..Default::default()
+            };
+            evaluate(&def, &w, r#"{"a":1}"#, &HashMap::new())
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shown(None), ["A"]);
+        let modes: Definition = serde_saphyr::from_str(
+            "defaults: {mode: a}\nrequests: {a: /a}\nfields: [{label: A, value: .a, when: '$options.mode == \"a\"'}, {label: B, value: .a, when: '$options.mode == \"b\"'}]",
+        )
+        .unwrap();
+        modes.validate().unwrap();
+        let in_mode = |mode: &str| {
+            let w = WidgetConfig::default();
+            evaluate(&modes, &w, r#"{"a":1}"#, &vars(&[("mode", mode)]))
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            (in_mode("a"), in_mode("b")),
+            (vec!["A".to_string()], vec!["B".to_string()])
+        );
+        assert_eq!(shown(Some(vec!["bee".into(), "a".into()])), ["B", "A"]);
     }
 
     /// `docs/widget-types.md` lists every built-in type; this keeps it in sync.
@@ -1081,8 +1302,10 @@ fields:
              do not edit by hand. How widgets work and how to write new types: \
              [widgets.md](widgets.md).\n\n\
              Every type also accepts `url` (the API address, when it differs from the service url) \
-             and `fields` (which fields to show, in order). Fields are listed in their default \
-             display order.\n",
+             and `fields` (which fields to show, in order). In `fields`, a field can be named by \
+             its label or by its gethomepage key (in parentheses), ignoring case. Fields in \
+             _italics_ are only shown when listed in `fields`; the others are shown by default, \
+             in this order.\n",
         );
         for src in BUILTIN_SOURCES {
             let title = src
@@ -1135,7 +1358,22 @@ fields:
                     })
                     .collect();
                 let needs: Vec<String> = def.needs.iter().map(|n| code(n)).collect();
-                let fields: Vec<&str> = def.fields.iter().map(|f| f.label.as_str()).collect();
+                // `Label` plus its gethomepage key when it differs; hidden ones in italics.
+                let fields: Vec<String> = def
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let mut out = f.label.clone();
+                        if let Some(k) = f
+                            .key
+                            .as_deref()
+                            .filter(|k| !k.eq_ignore_ascii_case(&f.label))
+                        {
+                            out += &format!(" (`{k}`)");
+                        }
+                        if f.hidden { format!("_{out}_") } else { out }
+                    })
+                    .collect();
                 doc += &format!(
                     "| `{name}` | {} | {} | {} | {} |\n",
                     needs.join(", "),

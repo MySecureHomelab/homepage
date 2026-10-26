@@ -2,39 +2,44 @@
 # Each entry: needs (required options), headers, optional login, named requests,
 # and fields computed with jq over {"<request name>": <response>}. See src/widgets.rs.
 
-# Pi-hole v6 (session login with the web password as `key`).
+# Pi-hole: set `version: 6` for Pi-hole v6 (default 5, as in gethomepage). `key` is optional:
+# the API token on v5, the web or app password on v6.
 pihole:
-  needs: [key]
+  defaults: { version: "5" }
+  computed:
+    v6: 'if ($options.version | tonumber) >= 6 then "" else null end'
+    v5: 'if ($options.version | tonumber) >= 6 then null else "" end'
   headers: { X-FTL-SID: "{token}" }
-  login: { path: /api/auth, method: POST, json: { password: "{key}" }, token: .session.sid }
+  login: { path: "/api/auth{v6}", method: POST, json: { password: "{key}" }, token: .session.sid }
   requests:
-    summary: /api/stats/summary
+    summary: { path: "/api/stats/summary{v6}", optional: true }
+    summary5: { path: "/admin/api.php?summaryRaw{v5}", query: { auth: "{key}" }, optional: true }
   fields:
-    - { label: Queries, value: .summary.queries.total }
-    - { label: Blocked, value: .summary.queries.blocked }
-    - { label: Blocked %, value: .summary.queries.percent_blocked, format: percent }
-    - { label: Gravity, value: .summary.gravity.domains_being_blocked }
+    - { label: Queries, key: queries, value: ".summary.queries.total // .summary5.dns_queries_today" }
+    - { label: Blocked, key: blocked, value: ".summary.queries.blocked // .summary5.ads_blocked_today" }
+    - { label: Blocked %, key: blocked_percent, hidden: true, value: ".summary.queries.percent_blocked // .summary5.ads_percentage_today", format: percent }
+    - { label: Gravity, key: gravity, value: ".summary.gravity.domains_being_blocked // .summary5.domains_being_blocked" }
 
-# Pi-hole v5 (legacy API, `key` is the API token). The key can only go in the query string.
+# Pi-hole v5 (legacy API, `key` is the optional API token). Same as `pihole` with version 5.
 pihole5:
-  needs: [key]
   requests:
-    summary: /admin/api.php?summaryRaw&auth={key}
+    summary: { path: "/admin/api.php?summaryRaw", query: { auth: "{key}" } }
   fields:
-    - { label: Queries, value: .summary.dns_queries_today }
-    - { label: Blocked, value: .summary.ads_blocked_today }
-    - { label: Blocked %, value: .summary.ads_percentage_today, format: percent }
-    - { label: Gravity, value: .summary.domains_being_blocked }
+    - { label: Queries, key: queries, value: .summary.dns_queries_today }
+    - { label: Blocked, key: blocked, value: .summary.ads_blocked_today }
+    - { label: Blocked %, key: blocked_percent, hidden: true, value: .summary.ads_percentage_today, format: percent }
+    - { label: Gravity, key: gravity, value: .summary.domains_being_blocked }
 
+# `username` / `password` of the web interface.
 adguard:
   headers: { Authorization: "Basic {basic}" }
   requests:
     stats: /control/stats
   fields:
-    - { label: Queries, value: .stats.num_dns_queries }
-    - { label: Blocked, value: .stats.num_blocked_filtering }
-    - { label: Filtered, value: "(.stats.num_replaced_safebrowsing // 0) + (.stats.num_replaced_safesearch // 0) + (.stats.num_replaced_parental // 0)" }
-    - { label: Latency, value: '"\((.stats.avg_processing_time * 100000 | round) / 100) ms"', format: text }
+    - { label: Queries, key: queries, value: .stats.num_dns_queries }
+    - { label: Blocked, key: blocked, value: .stats.num_blocked_filtering }
+    - { label: Filtered, key: filtered, value: "(.stats.num_replaced_safebrowsing // 0) + (.stats.num_replaced_safesearch // 0) + (.stats.num_replaced_parental // 0)" }
+    - { label: Latency, key: latency, value: '"\((.stats.avg_processing_time * 100000 | round) / 100) ms"', format: text }
 
 # `key` is an API token; optional `range` (LastHour, LastDay...) and cluster `node`.
 technitium:
@@ -45,43 +50,53 @@ technitium:
       path: /api/dashboard/stats/get
       query: { token: "{key}", utc: "true", type: "{range}", node: "{node}" }
   fields:
-    - { label: Queries, value: .stats.response.stats.totalQueries }
-    - { label: Success, value: .stats.response.stats.totalNoError }
-    - { label: Failures, value: .stats.response.stats.totalServerFailure }
-    - { label: NX Domains, value: .stats.response.stats.totalNxDomain }
-    - { label: Refused, value: .stats.response.stats.totalRefused }
-    - { label: Authoritative, value: .stats.response.stats.totalAuthoritative }
-    - { label: Recursive, value: .stats.response.stats.totalRecursive }
-    - { label: Cached, value: .stats.response.stats.totalCached }
-    - { label: Blocked, value: .stats.response.stats.totalBlocked }
-    - { label: Dropped, value: .stats.response.stats.totalDropped }
-    - { label: Clients, value: .stats.response.stats.totalClients }
+    - { label: Queries, key: totalQueries, value: .stats.response.stats.totalQueries }
+    - { label: Success, key: totalNoError, hidden: true, value: .stats.response.stats.totalNoError }
+    - { label: Failures, key: totalServerFailure, value: .stats.response.stats.totalServerFailure }
+    - { label: NX Domains, key: totalNxDomain, hidden: true, value: .stats.response.stats.totalNxDomain }
+    - { label: Refused, key: totalRefused, hidden: true, value: .stats.response.stats.totalRefused }
+    - { label: Authoritative, key: totalAuthoritative, value: .stats.response.stats.totalAuthoritative }
+    - { label: Recursive, key: totalRecursive, hidden: true, value: .stats.response.stats.totalRecursive }
+    - { label: Cached, key: totalCached, value: .stats.response.stats.totalCached }
+    - { label: Blocked, key: totalBlocked, hidden: true, value: .stats.response.stats.totalBlocked }
+    - { label: Dropped, key: totalDropped, hidden: true, value: .stats.response.stats.totalDropped }
+    - { label: Clients, key: totalClients, hidden: true, value: .stats.response.stats.totalClients }
 
-# Set the widget url to https://api.nextdns.io. `profile` is the profile ID.
+# NextDNS API (https://api.nextdns.io, no url needed). `profile` is the profile ID.
 nextdns:
   needs: [key, profile]
+  defaults: { url: "https://api.nextdns.io" }
   headers: { X-Api-Key: "{key}" }
   requests:
     status: /profiles/{profile}/analytics/status
   fields:
-    - { label: Default, value: "[.status.data[]? | select(.status == \"default\") | .queries] | add // 0" }
-    - { label: Blocked, value: "[.status.data[]? | select(.status == \"blocked\") | .queries] | add // 0" }
-    - { label: Allowed, value: "[.status.data[]? | select(.status == \"allowed\") | .queries] | add // 0" }
-    - { label: Relayed, value: "[.status.data[]? | select(.status == \"relayed\") | .queries] | add // 0" }
+    - { label: Default, key: default, value: "[.status.data[]? | select(.status == \"default\") | .queries] | add // 0" }
+    - { label: Blocked, key: blocked, value: "[.status.data[]? | select(.status == \"blocked\") | .queries] | add // 0" }
+    - { label: Allowed, key: allowed, value: "[.status.data[]? | select(.status == \"allowed\") | .queries] | add // 0" }
+    - { label: Relayed, key: relayed, value: "[.status.data[]? | select(.status == \"relayed\") | .queries] | add // 0" }
 
-# UniFi OS console (UDM, Cloud Key...) with an API key. Uses the site named `site` (default "default"; name or description).
-# Older standalone controllers (login + CSRF) are not supported.
+# UniFi OS console (UDM, Cloud Key...): an API `key`, or a local account `username` / `password`.
+# `site` is the site name or description (default "default").
+# Older standalone controllers (no /proxy/network prefix) are not supported.
 unifi:
-  needs: [key]
   defaults: { site: default }
-  headers: { X-API-KEY: "{key}", Accept: application/json }
+  headers: { X-API-KEY: "{key}", Accept: application/json, Cookie: "{token}" }
+  login:
+    path: /api/auth/login
+    method: POST
+    json: { username: "{username}", password: "{password}", remember: true, rememberMe: true }
+    cookie: TOKEN
   requests:
     sites: /proxy/network/api/stat/sites
   fields:
-    - { label: Uptime, value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wan\") | .[\"gw_system-stats\"].uptime)", format: duration }
-    - { label: WAN, value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wan\") | if .status == \"ok\" then \"UP\" else \"DOWN\" end)", format: text }
-    - { label: LAN Users, value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"lan\") | .num_user)" }
-    - { label: WLAN Users, value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wlan\") | .num_user)" }
+    - { label: Uptime, key: uptime, when: "any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"wan\" and .[\"gw_system-stats\"] != null)", value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wan\") | .[\"gw_system-stats\"].uptime)", format: duration }
+    - { label: WAN, key: wan, when: "any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"wan\" and .status != \"unknown\")", value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wan\" and .status != \"unknown\") | if .status == \"ok\" then \"UP\" else \"DOWN\" end)", format: text }
+    - { label: LAN Users, key: lan_users, when: "any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"lan\" and .status != \"unknown\")", value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"lan\" and .status != \"unknown\") | .num_user)" }
+    - { label: LAN Devices, key: lan_devices, when: "any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"lan\" and .status != \"unknown\") and (any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"wlan\" and .status != \"unknown\") | not)", value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"lan\" and .status != \"unknown\") | .num_adopted)" }
+    - { label: LAN, key: lan, when: "any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"lan\" and .status != \"unknown\") and (any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"wlan\" and .status != \"unknown\") | not)", value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"lan\" and .status != \"unknown\") | if .status == \"ok\" then \"UP\" else \"DOWN\" end)", format: text }
+    - { label: WLAN Users, key: wlan_users, when: "any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"wlan\" and .status != \"unknown\")", value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wlan\" and .status != \"unknown\") | .num_user)" }
+    - { label: WLAN Devices, key: wlan_devices, when: "any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"wlan\" and .status != \"unknown\") and (any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"lan\" and .status != \"unknown\") | not)", value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wlan\" and .status != \"unknown\") | .num_adopted)" }
+    - { label: WLAN, key: wlan, when: "any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"wlan\" and .status != \"unknown\") and (any((.sites.data | map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]?; .subsystem == \"lan\" and .status != \"unknown\") | not)", value: "(.sites.data | (map(select(.name == $options.site or .desc == $options.site))[0]) | .health[]? | select(.subsystem == \"wlan\" and .status != \"unknown\") | if .status == \"ok\" then \"UP\" else \"DOWN\" end)", format: text }
 
 # OPNsense: `username` / `password` are the API key / secret. `wan` is the interface to show (default wan).
 opnsense:
@@ -92,26 +107,32 @@ opnsense:
     activity: /api/diagnostics/activity/getActivity
     interface: /api/diagnostics/traffic/interface
   fields:
-    - { label: CPU Load, value: "100 - (.activity.headers[2] | split(\" idle\")[0] | split(\" \") | last | rtrimstr(\"%\") | tonumber)", format: percent }
-    - { label: Active Memory, value: ".activity.headers[3] | split(\" Active,\")[0] | ltrimstr(\"Mem: \")", format: text }
-    - { label: WAN Upload, value: ".interface.interfaces[$options.wan][\"bytes transmitted\"] | tonumber", format: bytes }
-    - { label: WAN Download, value: ".interface.interfaces[$options.wan][\"bytes received\"] | tonumber", format: bytes }
+    - { label: CPU Load, key: cpu, value: '100 - (.activity.headers[2] | capture(" (?<v>[0-9.]+)% idle").v | tonumber)', format: percent }
+    - { label: Active Memory, key: memory, value: '.activity.headers[3] | capture("Mem: (?<m>.+) Active,").m', format: text }
+    - { label: WAN Upload, key: wanUpload, value: '.interface.interfaces[$options.wan]["bytes transmitted"]', format: bytes }
+    - { label: WAN Download, key: wanDownload, value: '.interface.interfaces[$options.wan]["bytes received"]', format: bytes }
 
-# pfSense with the pfSense REST API package v2: an API key (`key`) or admin `username` / `password`.
-# `wan` is the interface to show, by name or hardware id such as igb0 (default wan).
+# pfSense with the pfSense REST API package: `version: 2` for API v2 (default 1, as in gethomepage).
+# Auth: admin `username` / `password`, or an API `key` (v2, sent as X-API-Key; gethomepage's `headers:` map is not supported).
+# `wan` is the interface to show, by hardware id such as igb0 or name (default wan).
 pfsense:
-  defaults: { wan: wan }
+  defaults: { wan: wan, version: "1" }
+  computed:
+    v2: 'if ($options.version | tonumber) >= 2 then "" else null end'
+    v1: 'if ($options.version | tonumber) >= 2 then null else "" end'
   headers: { X-API-Key: "{key}", Authorization: "Basic {basic}" }
   requests:
-    system: /api/v2/status/system
-    interfaces: /api/v2/status/interfaces?limit=0&offset=0
+    system: { path: "/api/v1/status/system{v1}", optional: true }
+    interfaces: { path: "/api/v1/status/interface{v1}", optional: true }
+    system2: { path: "/api/v2/status/system{v2}", optional: true }
+    interfaces2: { path: "/api/v2/status/interfaces?limit=0&offset=0{v2}", optional: true }
   fields:
-    - { label: Load Avg, value: ".system.data.cpu_load_avg[0]" }
-    - { label: Mem Usage, value: .system.data.mem_usage, format: percent }
-    - { label: Temp, value: '"\(.system.data.temp_c)°C"', format: text }
-    - { label: WAN Status, value: "[.interfaces.data[] | select(.name == $options.wan or .hwif == $options.wan)][0].status | if . == \"up\" then \"Up\" else \"Down\" end", format: text }
-    - { label: WAN IP, value: "[.interfaces.data[] | select(.name == $options.wan or .hwif == $options.wan)][0].ipaddr", format: text }
-    - { label: Disk Usage, value: .system.data.disk_usage, format: percent }
+    - { label: Load Avg, key: load, value: ".system2.data.cpu_load_avg[0] // .system.data.load_avg[0]" }
+    - { label: Mem Usage, key: memory, value: ".system2.data.mem_usage // (.system.data.mem_usage * 100)", format: percent }
+    - { label: Temp, key: temp, value: '(.system2 // .system).data.temp_c | "\(.)°C"', format: text }
+    - { label: WAN Status, key: wanStatus, value: "[(.interfaces2 // .interfaces).data[] | select(.hwif == $options.wan or .name == $options.wan)][0].status | if . == \"up\" then \"Up\" else \"Down\" end", format: text }
+    - { label: WAN IP, key: wanIP, hidden: true, value: "[(.interfaces2 // .interfaces).data[] | select(.hwif == $options.wan or .name == $options.wan)][0].ipaddr", format: text }
+    - { label: Disk Usage, key: disk, hidden: true, value: ".system2.data.disk_usage // (.system.data.disk_usage * 100)", format: percent }
 
 # RouterOS 7 REST API (/rest) with an admin `username` / `password`. RouterOS returns numbers as strings.
 mikrotik:
@@ -121,14 +142,18 @@ mikrotik:
     system: /rest/system/resource
     leases: /rest/ip/dhcp-server/lease?.proplist=address
   fields:
-    - { label: Uptime, value: '.system.uptime', format: text }
-    - { label: CPU Load, value: '.system["cpu-load"] | tonumber', format: percent }
-    - { label: Memory Used, value: '100 - (.system["free-memory"] | tonumber) / (.system["total-memory"] | tonumber) * 100', format: percent }
-    - { label: Leases, value: "(.leases // []) | length" }
+    - { label: Uptime, key: uptime, value: '.system.uptime', format: text }
+    - { label: CPU Load, key: cpuLoad, value: '.system["cpu-load"]', format: percent }
+    - { label: Memory Used, key: memoryUsed, value: '100 - (.system["free-memory"] | tonumber) / (.system["total-memory"] | tonumber) * 100', format: percent }
+    - { label: Leases, key: numberOfLeases, value: "(.leases // []) | length" }
 
-# OpenWrt over ubus (rpcd, needs uhttpd-mod-ubus and an rpcd user): system stats.
+# OpenWrt over ubus (rpcd, needs uhttpd-mod-ubus and an rpcd user). Without `interfaceName`: system
+# stats; with it (e.g. eth0): that device's status and counters.
 openwrt:
   needs: [username, password]
+  computed:
+    system_mode: 'if $options.interfaceName then null else "" end'
+    iface_mode: 'if $options.interfaceName then "" else null end'
   login:
     path: /ubus
     method: POST
@@ -137,14 +162,23 @@ openwrt:
     expired: '.error.code? == -32002'
   requests:
     system:
-      path: /ubus
+      path: /ubus{system_mode}
       method: POST
+      optional: true
       json: { jsonrpc: "2.0", id: 1, method: call, params: ["{token}", system, info, {}] }
+    device:
+      path: /ubus{iface_mode}
+      method: POST
+      optional: true
+      json: { jsonrpc: "2.0", id: 1, method: call, params: ["{token}", network.device, status, { name: "{interfaceName}" }] }
   fields:
-    - { label: Uptime, value: ".system.result[1].uptime", format: duration }
-    - { label: CPU Load Avg (5m), value: ".system.result[1].load[1] / 65536 * 100 | round / 100" }
+    - { label: Uptime, key: uptime, when: "$options.interfaceName == null", value: ".system.result[1].uptime", format: duration }
+    - { label: CPU Load Avg (5m), key: cpuLoad, when: "$options.interfaceName == null", value: ".system.result[1].load[1] / 65536 * 100 | round / 100" }
+    - { label: Status, key: status, when: "$options.interfaceName != null", value: '.device.result[1] | if . == null then null elif .up then "Up" else "Down" end', format: text }
+    - { label: Transmitted, key: bytesTx, when: "$options.interfaceName != null", value: ".device.result[1].statistics.tx_bytes", format: bytes }
+    - { label: Received, key: bytesRx, when: "$options.interfaceName != null", value: ".device.result[1].statistics.rx_bytes", format: bytes }
 
-# OpenWrt network interface counters; `interfaceName` is e.g. wan or eth0.
+# OpenWrt network interface counters; `interfaceName` is e.g. wan or eth0. Same as `openwrt` with interfaceName.
 openwrt_interface:
   needs: [username, password, interfaceName]
   login:
@@ -159,28 +193,32 @@ openwrt_interface:
       method: POST
       json: { jsonrpc: "2.0", id: 1, method: call, params: ["{token}", network.device, status, {}] }
   fields:
-    - { label: Status, value: 'if .device.result[1][$options.interfaceName].up then "Up" else "Down" end', format: text }
-    - { label: Transmitted, value: ".device.result[1][$options.interfaceName].statistics.tx_bytes", format: bytes }
-    - { label: Received, value: ".device.result[1][$options.interfaceName].statistics.rx_bytes", format: bytes }
+    - { label: Status, key: status, value: 'if .device.result[1][$options.interfaceName].up then "Up" else "Down" end', format: text }
+    - { label: Transmitted, key: bytesTx, value: ".device.result[1][$options.interfaceName].statistics.tx_bytes", format: bytes }
+    - { label: Received, key: bytesRx, value: ".device.result[1][$options.interfaceName].statistics.rx_bytes", format: bytes }
 
-# Tailscale API (https://api.tailscale.com, so set `url: https://api.tailscale.com`).
+# Tailscale API (https://api.tailscale.com, no url needed).
 # `key` is an API access token, `deviceid` the device (node) ID.
 tailscale:
   needs: [key, deviceid]
+  defaults: { url: "https://api.tailscale.com" }
   headers: { Authorization: "Bearer {key}" }
   requests:
     device: /api/v2/device/{deviceid}
   fields:
-    - { label: Address, value: ".device.addresses[0]", format: text }
-    - { label: Last Seen, value: "now - (.device.lastSeen[0:19] + \"Z\" | fromdateiso8601)", format: duration }
-    - label: Expires
-      value: 'if .device.keyExpiryDisabled then "Never" else ((.device.expires[0:19] + "Z" | fromdateiso8601) - now) / 86400 | floor | "\(.) days" end'
-      format: text
-    - { label: User, value: .device.user, format: text }
-    - { label: Hostname, value: .device.hostname, format: text }
-    - { label: OS, value: .device.os, format: text }
-    - { label: Client Version, value: '.device.clientVersion // "-"', format: text }
-    - { label: Update Available, value: 'if .device.updateAvailable then "Yes" else "No" end', format: text }
+    - { label: Address, key: address, value: ".device.addresses[0]", format: text }
+    - { label: Last Seen, key: last_seen, value: '.device.lastSeen[0:19] + "Z" | fromdateiso8601', format: ago }
+    - { label: Expires, key: expires, value: 'if .device.keyExpiryDisabled then "Never" else (.device.expires[0:19] + "Z" | fromdateiso8601) - now end', format: duration }
+    - { label: User, key: user, hidden: true, value: .device.user, format: text }
+    - { label: Hostname, key: hostname, hidden: true, value: .device.hostname, format: text }
+    - { label: Name, key: name, hidden: true, value: .device.name, format: text }
+    - { label: Client Version, key: client_version, hidden: true, value: '.device.clientVersion // "-"', format: text }
+    - { label: OS, key: os, hidden: true, value: .device.os, format: text }
+    - { label: Created, key: created, hidden: true, value: .device.created, format: text }
+    - { label: Authorized, key: authorized, hidden: true, value: 'if .device.authorized then "Yes" else "No" end', format: text }
+    - { label: Is External, key: is_external, hidden: true, value: 'if .device.isExternal then "Yes" else "No" end', format: text }
+    - { label: Update Available, key: update_available, hidden: true, value: 'if .device.updateAvailable then "Yes" else "No" end', format: text }
+    - { label: Tags, key: tags, hidden: true, value: '.device.tags | if type == "array" then join(", ") else "-" end', format: text }
 
 # Headscale API key and node id (numeric id of a node).
 headscale:
@@ -189,60 +227,78 @@ headscale:
   requests:
     node: /api/v1/node/{nodeId}
   fields:
-    - { label: Name, value: .node.node.givenName, format: text }
-    - { label: Address, value: ".node.node.ipAddresses[0]", format: text }
-    - { label: Last Seen, value: "now - (.node.node.lastSeen[0:19] + \"Z\" | fromdateiso8601)", format: duration }
-    - { label: Status, value: 'if .node.node.online then "Online" else "Offline" end', format: text }
+    - { label: Name, key: name, value: .node.node.givenName, format: text }
+    - { label: Address, key: address, value: ".node.node.ipAddresses[0]", format: text }
+    - { label: Last Seen, key: last_seen, value: '.node.node.lastSeen[0:19] + "Z" | fromdateiso8601', format: ago }
+    - { label: Status, key: status, value: 'if .node.node.online then "Online" else "Offline" end', format: text }
 
-# NetAlertX v2 API (`key` is the API token).
+# NetAlertX: `key` is the API_TOKEN. `version: 2` for NetAlertX v26.1.17+ (default 1, as in
+# gethomepage); version 2 uses the backend port.
 netalertx:
   needs: [key]
+  defaults: { version: "1" }
+  computed:
+    v2: 'if ($options.version | tonumber) > 1 then "" else null end'
+    v1: 'if ($options.version | tonumber) > 1 then null else "" end'
   headers: { Authorization: "Bearer {key}" }
   requests:
-    totals: /devices/totals
+    totals: { path: "/devices/totals{v2}", optional: true }
+    totals1: { path: "/php/server/devices.php?action=getDevicesTotals{v1}", optional: true }
   fields:
-    - { label: Total, value: ".totals[0]" }
-    - { label: Connected, value: ".totals[1]" }
-    - { label: New Devices, value: ".totals[3]" }
-    - { label: Down Alerts, value: ".totals[4]" }
+    - { label: Total, key: total, value: "(.totals // .totals1)[0]" }
+    - { label: Connected, key: connected, value: "(.totals // .totals1)[1]" }
+    - { label: New Devices, key: new_devices, value: "(.totals // .totals1)[3]" }
+    - { label: Down Alerts, key: down_alerts, value: "(.totals // .totals1)[4]" }
 
-# NetAlertX legacy (PHP) API.
+# NetAlertX legacy (PHP) API. Same as `netalertx` with version 1.
 netalertx1:
   needs: [key]
   headers: { Authorization: "Bearer {key}" }
   requests:
     totals: /php/server/devices.php?action=getDevicesTotals
   fields:
-    - { label: Total, value: ".totals[0]" }
-    - { label: Connected, value: ".totals[1]" }
-    - { label: New Devices, value: ".totals[3]" }
-    - { label: Down Alerts, value: ".totals[4]" }
+    - { label: Total, key: total, value: ".totals[0]" }
+    - { label: Connected, key: connected, value: ".totals[1]" }
+    - { label: New Devices, key: new_devices, value: ".totals[3]" }
+    - { label: Down Alerts, key: down_alerts, value: ".totals[4]" }
 
 # Gluetun control server (port 8000). `key` is optional (only if the control server has auth).
-# The forwarded port is left out: its endpoint errors when port forwarding is off.
+# `version: 2` for Gluetun 3.40.1+ (default 1). Port Forwarded needs its route allowed in the auth config.
 gluetun:
+  defaults: { version: "1" }
+  computed:
+    v2: 'if ($options.version | tonumber) > 1 then "" else null end'
+    v1: 'if ($options.version | tonumber) > 1 then null else "" end'
   headers: { X-API-Key: "{key}" }
   requests:
     ip: /v1/publicip/ip
+    pf: { path: "/v1/openvpn/portforwarded{v1}", optional: true }
+    pf2: { path: "/v1/portforward{v2}", optional: true }
   fields:
-    - { label: Public IP, value: .ip.public_ip, format: text }
-    - { label: Region, value: .ip.region, format: text }
-    - { label: Country, value: .ip.country, format: text }
+    - { label: Public IP, key: public_ip, value: .ip.public_ip, format: text }
+    - { label: Region, key: region, value: .ip.region, format: text }
+    - { label: Country, key: country, value: .ip.country, format: text }
+    - { label: Port Forwarded, key: port_forwarded, hidden: true, value: "(.pf2 // .pf).port | if . == null then null else tostring end", format: text }
 
-# wg-easy up to v14: `password` is the web UI password. "Connected" = handshake within `threshold` minutes (default 2).
+# wg-easy: `version: 2` for wg-easy v15+ (default 1, as in gethomepage). v1: `password` of the
+# web UI; v2: admin `username` / `password`. "Connected" = handshake within `threshold` minutes (default 2).
 wgeasy:
   needs: [password]
-  defaults: { threshold: "2" }
-  headers: { Authorization: "{password}" }
+  defaults: { threshold: "2", version: "1" }
+  computed:
+    v2: 'if ($options.version | tonumber) >= 2 then "" else null end'
+    v1: 'if ($options.version | tonumber) >= 2 then null else "" end'
+  headers: { Authorization: ["Basic {basic}", "{password}"] }
   requests:
-    clients: /api/wireguard/client
+    clients: { path: "/api/wireguard/client{v1}", optional: true }
+    clients2: { path: "/api/client{v2}", optional: true }
   fields:
-    - { label: Connected, value: '[.clients[] | select(.latestHandshakeAt != null and (now - (.latestHandshakeAt[0:19] + "Z" | fromdateiso8601)) < ($options.threshold | tonumber) * 60)] | length' }
-    - { label: Enabled, value: "[.clients[] | select(.enabled)] | length" }
-    - { label: Disabled, value: "[.clients[] | select(.enabled | not)] | length" }
-    - { label: Total, value: ".clients | length" }
+    - { label: Connected, key: connected, value: '[(.clients2 // .clients)[] | select(.latestHandshakeAt != null and (now - (.latestHandshakeAt[0:19] + "Z" | fromdateiso8601)) < ($options.threshold | tonumber) * 60)] | length' }
+    - { label: Enabled, key: enabled, value: "[(.clients2 // .clients)[] | select(.enabled)] | length" }
+    - { label: Disabled, key: disabled, hidden: true, value: "[(.clients2 // .clients)[] | select(.enabled | not)] | length" }
+    - { label: Total, key: total, value: "(.clients2 // .clients) | length" }
 
-# wg-easy v15+: `username` / `password` of an admin, same `threshold`.
+# wg-easy v15+: `username` / `password` of an admin, same `threshold`. Same as `wgeasy` with version 2.
 wgeasy2:
   needs: [username, password]
   defaults: { threshold: "2" }
@@ -250,10 +306,10 @@ wgeasy2:
   requests:
     clients: /api/client
   fields:
-    - { label: Connected, value: '[.clients[] | select(.latestHandshakeAt != null and (now - (.latestHandshakeAt[0:19] + "Z" | fromdateiso8601)) < ($options.threshold | tonumber) * 60)] | length' }
-    - { label: Enabled, value: "[.clients[] | select(.enabled)] | length" }
-    - { label: Disabled, value: "[.clients[] | select(.enabled | not)] | length" }
-    - { label: Total, value: ".clients | length" }
+    - { label: Connected, key: connected, value: '[.clients[] | select(.latestHandshakeAt != null and (now - (.latestHandshakeAt[0:19] + "Z" | fromdateiso8601)) < ($options.threshold | tonumber) * 60)] | length' }
+    - { label: Enabled, key: enabled, value: "[.clients[] | select(.enabled)] | length" }
+    - { label: Disabled, key: disabled, hidden: true, value: "[.clients[] | select(.enabled | not)] | length" }
+    - { label: Total, key: total, value: ".clients | length" }
 
 # Nginx Proxy Manager: an admin `username` (email) / `password`.
 npm:
@@ -263,9 +319,9 @@ npm:
   requests:
     hosts: /api/nginx/proxy-hosts
   fields:
-    - { label: Enabled, value: "[.hosts[] | select(.enabled == true or .enabled == 1)] | length" }
-    - { label: Disabled, value: "[.hosts[] | select(.enabled == true or .enabled == 1 | not)] | length" }
-    - { label: Total, value: ".hosts | length" }
+    - { label: Enabled, key: enabled, value: "[.hosts[] | select(.enabled == true or .enabled == 1)] | length" }
+    - { label: Disabled, key: disabled, value: "[.hosts[] | select(.enabled == true or .enabled == 1 | not)] | length" }
+    - { label: Total, key: total, value: ".hosts | length" }
 
 # Traefik API (api@internal). `username` / `password` only if it sits behind basic auth.
 traefik:
@@ -273,18 +329,18 @@ traefik:
   requests:
     overview: /api/overview
   fields:
-    - { label: Routers, value: .overview.http.routers.total }
-    - { label: Services, value: .overview.http.services.total }
-    - { label: Middleware, value: .overview.http.middlewares.total }
+    - { label: Routers, key: routers, value: .overview.http.routers.total }
+    - { label: Services, key: services, value: .overview.http.services.total }
+    - { label: Middleware, key: middleware, value: .overview.http.middlewares.total }
 
 # Caddy admin API (default port 2019).
 caddy:
   requests:
     upstreams: /reverse_proxy/upstreams
   fields:
-    - { label: Upstreams, value: ".upstreams | length" }
-    - { label: Current requests, value: "[.upstreams[].num_requests] | add // 0" }
-    - { label: Failed requests, value: "[.upstreams[].fails] | add // 0" }
+    - { label: Upstreams, key: upstreams, value: ".upstreams | length" }
+    - { label: Current requests, key: requests, value: "[.upstreams[].num_requests] | add // 0" }
+    - { label: Failed requests, key: requests_failed, value: "[.upstreams[].fails] | add // 0" }
 
 # CrowdSec local API: the machine `username` / `password` (cscli machines add).
 crowdsec:
@@ -299,20 +355,21 @@ crowdsec:
     alerts: /v1/alerts?limit=500&since=24h&with_decisions=false&include_capi=false
     bans: /v1/alerts?decision_type=ban&include_capi=false&has_active_decision=1&with_decisions=false
   fields:
-    - { label: Alerts, value: "(.alerts // []) | length" }
-    - { label: Bans, value: "(.bans // []) | length" }
+    - { label: Alerts, key: alerts, value: '(.alerts // []) | length | if . >= 500 then "\(.)+" else . end' }
+    - { label: Bans, key: bans, value: "(.bans // []) | length" }
 
-# Cloudflare Tunnel via the Cloudflare API: set `url: https://api.cloudflare.com`.
+# Cloudflare Tunnel via the Cloudflare API (https://api.cloudflare.com, no url needed).
 # `key` is an API token (Account > Cloudflare Tunnel > Read), plus `accountid` and `tunnelid`.
 cloudflared:
   needs: [key, accountid, tunnelid]
+  defaults: { url: "https://api.cloudflare.com" }
   headers: { Authorization: "Bearer {key}" }
   requests:
     tunnel: /client/v4/accounts/{accountid}/cfd_tunnel/{tunnelid}
     connections: /client/v4/accounts/{accountid}/cfd_tunnel/{tunnelid}/connections
   fields:
-    - { label: Status, value: ".tunnel.result.status | (.[0:1] | ascii_upcase) + .[1:]", format: text }
-    - { label: Origin IP, value: '[.connections.result[]?.conns[]?.origin_ip | select(. != null)][0] // "-"', format: text }
+    - { label: Status, key: status, value: ".tunnel.result.status | (.[0:1] | ascii_upcase) + .[1:]", format: text }
+    - { label: Origin IP, key: origin_ip, value: '[.connections.result[]?.conns[]?.origin_ip | select(. != null and . != "")][0] // "-"', format: text }
 
 # NetBird management API with a personal access token (`key`).
 netbird:
@@ -322,9 +379,9 @@ netbird:
     peers: /api/peers
     users: /api/users
   fields:
-    - { label: Online Peers, value: '"\([.peers[] | select(.connected)] | length) / \(.peers | length)"', format: text }
-    - { label: Users, value: "[.users[] | select(.is_service_user | not)] | length" }
-    - { label: Login Expired, value: "[.peers[] | select(.login_expired)] | length" }
+    - { label: Online Peers, key: online, value: '"\([.peers[] | select(.connected)] | length) / \(.peers | length)"', format: text }
+    - { label: Users, key: users, value: "[.users[] | select(.is_service_user | not)] | length" }
+    - { label: Login Expired, key: login_expired, hidden: true, value: "[.peers[] | select(.login_expired)] | length" }
 
 # Pangolin integration API: `key` is an API key, `org` the organization id.
 pangolin:
@@ -334,26 +391,39 @@ pangolin:
     sites: /v1/org/{org}/sites
     resources: /v1/org/{org}/resources?pageSize=200
   fields:
-    - { label: Sites, value: '"\([(.sites.data.sites // [])[] | select(.online)] | length) / \((.sites.data.sites // []) | length)"', format: text }
+    - { label: Sites, key: sites, value: '"\([(.sites.data.sites // [])[] | select(.online)] | length) / \((.sites.data.sites // []) | length)"', format: text }
     - label: Resources
+      key: resources
       value: '"\([(.resources.data.resources // [])[] | select((.targets // []) | length == 0 or any(.healthStatus != "unhealthy"))] | length) / \((.resources.data.resources // []) | length)"'
       format: text
     - label: Targets
+      key: targets
       value: '"\([(.resources.data.resources // [])[] | (.targets // [])[] | select(.healthStatus != "unhealthy")] | length) / \([(.resources.data.resources // [])[] | (.targets // [])[]] | length)"'
       format: text
-    - { label: Traffic, value: "([(.sites.data.sites // [])[] | (.megabytesIn // 0) + (.megabytesOut // 0)] | add // 0) * 1000000", format: bytes }
-    - { label: In, value: "([(.sites.data.sites // [])[] | .megabytesIn // 0] | add // 0) * 1000000", format: bytes }
-    - { label: Out, value: "([(.sites.data.sites // [])[] | .megabytesOut // 0] | add // 0) * 1000000", format: bytes }
+    - { label: Traffic, key: traffic, value: "([(.sites.data.sites // [])[] | (.megabytesIn // 0) + (.megabytesOut // 0)] | add // 0) * 1000000", format: bytes }
+    - { label: In, key: in, hidden: true, value: "([(.sites.data.sites // [])[] | .megabytesIn // 0] | add // 0) * 1000000", format: bytes }
+    - { label: Out, key: out, hidden: true, value: "([(.sites.data.sites // [])[] | .megabytesOut // 0] | add // 0) * 1000000", format: bytes }
 
-# authentik API token (`key`), events volume API (authentik 2025.x+).
+# authentik API token (`key`). `version: 2` for authentik 2025.8+ (default 1, as in gethomepage);
+# Auths (24h) needs version 2.
 authentik:
   needs: [key]
+  defaults: { version: "1" }
+  computed:
+    v2: 'if ($options.version | tonumber) >= 2 then "" else null end'
+    v1: 'if ($options.version | tonumber) >= 2 then null else "" end'
   headers: { Authorization: "Bearer {key}" }
   requests:
     users: /api/v3/core/users/?page_size=1
-    events: /api/v3/events/events/volume/?actions=login&actions=login_failed&actions=authorize_application&history_days=1
+    logins: { path: "/api/v3/events/events/per_month/?action=login{v1}", optional: true }
+    failed: { path: "/api/v3/events/events/per_month/?action=login_failed{v1}", optional: true }
+    events: { path: "/api/v3/events/events/volume/?actions=login&actions=login_failed&actions=authorize_application&history_days=1{v2}", optional: true }
   fields:
-    - { label: Users, value: .users.pagination.count }
-    - { label: Logins (24h), value: '[.events[]? | select(.action == "login") | .count] | add // 0' }
-    - { label: Failed Logins (24h), value: '[.events[]? | select(.action == "login_failed") | .count] | add // 0' }
-    - { label: Auths (24h), value: '[.events[]? | select(.action == "authorize_application") | .count] | add // 0' }
+    - { label: Users, key: users, value: .users.pagination.count }
+    - label: Logins (24h)
+      key: loginsLast24H
+      value: 'if .events then [.events[]? | select(.action == "login") | .count] | add // 0 else [.logins[]? | select(.x_cord >= now * 1000 - 86400000) | .y_cord] | add // 0 end'
+    - label: Failed Logins (24h)
+      key: failedLoginsLast24H
+      value: 'if .events then [.events[]? | select(.action == "login_failed") | .count] | add // 0 else [.failed[]? | select(.x_cord >= now * 1000 - 86400000) | .y_cord] | add // 0 end'
+    - { label: Auths (24h), key: authorizationsLast24H, when: '($options.version | tonumber) >= 2', value: '[.events[]? | select(.action == "authorize_application") | .count] | add // null' }

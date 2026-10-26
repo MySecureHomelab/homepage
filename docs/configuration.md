@@ -21,8 +21,9 @@ All configuration lives in a single YAML file (`config.yaml` by default, or the 
 
 ## Top-level keys
 
-Every key is optional: an empty file is a valid, empty page. Unknown keys (typos included) are
-an error, reported with their line.
+Every key is optional: an empty file is a valid, empty page. An unknown key at this level (a
+typo) makes the file unreadable; everywhere else mistakes are reported without stopping the
+dashboard, see [Errors and hot reload](#hot-reload-and-errors).
 
 | Key | Default | Values |
 |---|---|---|
@@ -66,6 +67,13 @@ groups:
 Groups are shown in file order, and so are their services. Groups created by discovery come
 after them.
 
+gethomepage's service keys are understood too, so its `services.yaml` entries can be pasted
+under `services:`: `href` (= `url`), `siteMonitor` (= `check`), `server` + `container` (= a
+`docker://server/container` check, the server must be declared under `docker:`) and `widgets`
+(the first one is used). Other keys (`showStats`, `statusStyle`…) are reported and ignored. To
+convert a whole gethomepage config folder, see
+[deployment.md](deployment.md#migrating-from-gethomepage).
+
 ## Status checks
 
 | Form | Up when | Latency shown |
@@ -81,8 +89,8 @@ after them.
   down: use a `tcp://` check or an internal `http://` URL instead.
 - `docker://` checks update at the discovery pace (15 s). When the Docker host stops answering,
   its containers are down.
-- Invalid values (`tcp://host` without a port, `docker://` to an undeclared host, another
-  scheme) are a config error.
+- An invalid value (`tcp://host` without a port, `docker://` to an undeclared host, another
+  scheme) is reported and the service shows without a status dot.
 
 The dot is green (up), red (down) or grey (not checked yet). Hovering it shows the state and the
 latency.
@@ -138,9 +146,16 @@ widget:
 - **140 built-in types**, with their options and fields: [widget-types.md](widget-types.md).
 - Writing your own types (requests, auth, jq): [widgets.md](widgets.md).
 
-Options are checked on load: an unknown type, a missing required option, an unknown option or a
-field that does not exist are errors, listing the valid values. A widget needs a `url` (its own
-or the service's).
+Options are checked on load, against the type's definition:
+
+- An unknown type, a missing required option or a missing `url` (the widget's or the
+  service's): the widget cannot work, its card shows why.
+- An unknown option (e.g. gethomepage display settings such as `enableQueue`) or field: the
+  widget works, the option or field is ignored and reported, with the valid values.
+
+`fields` accepts the labels shown on the card or gethomepage's field names (`wanted`,
+`blocked_percent`…), ignoring case. Some types hide fields unless they are listed, as
+gethomepage does; [widget-types.md](widget-types.md) shows them in italics.
 
 How it works:
 
@@ -167,7 +182,8 @@ widget:
   password: ${file:/run/secrets/sonarr_password}
 ```
 
-- An unset variable or an unreadable file is an error, with the line number.
+- An unset variable or an unreadable file gives an empty value and is reported, with the line
+  number (the widget using it then usually shows an auth error).
 - YAML comments are not substituted: a commented-out `${…}` does no harm.
 - The value is inserted into the YAML as is. If a secret contains special characters (`: `,
   ` #`, a leading quote…), quote the reference: `key: "${MY_KEY}"`.
@@ -178,11 +194,21 @@ up a new environment value. Files are read again on every reload.
 
 ## Hot reload and errors
 
+A mistake never takes the dashboard down. There are two kinds of problems:
+
+- **Problems** (a bad check, an unknown widget option, an unset variable, an invalid `accent`…):
+  only the faulty part is left out or replaced by its default. Everything else works, and an
+  orange banner lists every problem with its location (`groups[0].services[2] (Sonarr): …`).
+  A widget that cannot work also shows its error on its own card.
+- **Errors**: the file cannot be read or is not a valid config (YAML syntax, a list where a
+  map is expected, an unknown top-level key). A red banner shows the message with its line,
+  and the page keeps the last valid config, or stays empty if there never was one.
+
+In both cases the server keeps running, including when it starts with a broken or missing
+file, and everything is also written to stderr.
+
 - The file's modification time is checked on every page load, every `/api/state` call and every
-  check round: edits apply without a restart.
-- If the new config is invalid, the page shows the error (file, line, message) in a banner and
-  **the last valid config keeps being served**. The error is also written to stderr.
-- At startup, an invalid config stops the process (exit code 1).
+  check round: edits apply without a restart, and fixing the file clears the banner.
 - New services are checked right away, without waiting for `check_interval`.
 
 The CSS (accent color) and the content update when the page is reloaded. Statuses, widgets and
@@ -216,7 +242,7 @@ The host name (`local`, `nas`) must not contain `/`; it is the one used in
 | `homepage.check` | Check. Defaults to `docker://<host>/<container>`. |
 | `homepage.widget.type` | Widget type. |
 | `homepage.widget.url` | Widget API URL. |
-| `homepage.widget.fields` | Fields, as a JSON list (`["Wanted","Queued"]`) or comma-separated (`Wanted, Queued`). |
+| `homepage.widget.fields` | Fields (labels or gethomepage names), as a JSON list (`["wanted","queued"]`) or comma-separated (`Wanted, Queued`). |
 | `homepage.widget.<option>` | Any other widget option: `homepage.widget.key`, `homepage.widget.username`… |
 
 ```yaml
@@ -261,8 +287,8 @@ Cluster access: in-cluster config (the pod's service account) or, outside a clus
 - A service declared in the config **with the same name in the same group** wins: the
   discovered one is ignored.
 - Discovered services are sorted by group, then by name.
-- An invalid discovered check or widget is dropped (the service stays on the page), with a
-  message in the logs.
+- An invalid discovered check is dropped (the service stays on the page), with a message in
+  the logs. A widget problem shows on the service card.
 - When a Docker host or the cluster stops answering, its services stay on the page with their
   last known state and the containers turn down. Errors are logged once, not on every round.
 
@@ -288,7 +314,7 @@ When the server stops answering, the page keeps the last values on screen.
 | | |
 |---|---|
 | `homepage` | Starts the server. |
-| `homepage check` | Loads and validates the config, prints `<path>: OK` and exits (code 0), or prints the error (code 1). Useful in CI or before a deployment. |
+| `homepage check` | Loads the config and prints `<path>: OK` (code 0). Stricter than the server: any problem or error is printed and exits with code 1. Useful in CI or before a deployment. |
 | `HOMEPAGE_CONFIG` | Config path. Default `config.yaml` (relative to the working directory), `/config/config.yaml` in the Docker image. |
 | `HOMEPAGE_ADDR` | Listen address. Default `0.0.0.0:3000`. |
 | `KUBECONFIG` | Kubeconfig to use outside a cluster. |

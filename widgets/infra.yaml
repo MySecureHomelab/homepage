@@ -3,51 +3,56 @@
 # and fields computed with jq over {"<request name>": <response>}. See src/widgets.rs.
 # Not supported: qnap (XML only), urbackup (custom login protocol), apcups (raw TCP).
 
+# username = API token id (user@realm!tokenid), password = token secret. node: limit to one node.
 proxmox:
-  needs: [username, password]   # API token: username = user@realm!tokenid, password = secret
-  defaults: { node: "" }        # limit to one node (name); empty = whole cluster
+  needs: [username, password]
+  defaults: { node: "" }
   headers: { Authorization: "PVEAPIToken={username}={password}" }
   requests:
     resources: /api2/json/cluster/resources
   fields:
     - label: VMs
+      key: vms
       format: text
-      value: '[.resources.data[] | select(.type == "qemu" and (.template // 0) == 0 and ($options.node == "" or .node == $options.node))] | "\([.[] | select(.status == "running")] | length) / \(length)"'
+      value: '[.resources.data[] | select(.type == "qemu" and .template == 0 and ($options.node == "" or .node == $options.node))] | "\([.[] | select(.status == "running")] | length) / \(length)"'
     - label: LXC
+      key: lxc
       format: text
-      value: '[.resources.data[] | select(.type == "lxc" and (.template // 0) == 0 and ($options.node == "" or .node == $options.node))] | "\([.[] | select(.status == "running")] | length) / \(length)"'
+      value: '[.resources.data[] | select(.type == "lxc" and .template == 0 and ($options.node == "" or .node == $options.node))] | "\([.[] | select(.status == "running")] | length) / \(length)"'
     - label: CPU
+      key: resources.cpu
       format: percent
       value: '[.resources.data[] | select(.type == "node" and .status == "online" and ($options.node == "" or .node == $options.node))] | (map(.cpu * .maxcpu) | add) / (map(.maxcpu) | add) * 100'
     - label: MEM
+      key: resources.mem
       format: percent
       value: '[.resources.data[] | select(.type == "node" and .status == "online" and ($options.node == "" or .node == $options.node))] | (map(.mem) | add) / (map(.maxmem) | add) * 100'
 
+# username = API token id (user@realm!tokenid), password = token secret.
+# datastore: one datastore's usage; all datastores combined when unset or not found.
 proxmoxbackupserver:
-  needs: [username, password]   # API token: username = user@realm!tokenid, password = secret
-  defaults: { datastore: "" }   # limit the usage to one datastore; empty = all
+  needs: [username, password]
+  defaults: { datastore: "" }
   computed: { since: 'now - 86400 | floor' }
   headers: { Authorization: "PBSAPIToken={username}:{password}" }
   requests:
     datastores: /api2/json/status/datastore-usage
-    tasks: "/api2/json/nodes/localhost/tasks?errors=1&limit=100&since={since}"
+    tasks: { path: /api2/json/nodes/localhost/tasks, query: { errors: "true", limit: "100", since: "{since}" } }
     host: /api2/json/nodes/localhost/status
   fields:
     - label: Datastore
+      key: datastore_usage
       format: percent
-      value: '.datastores.data | map(select($options.datastore == "" or .store == $options.datastore)) | (map(.used) | add) / (map(.total) | add) * 100'
-    - label: Failed Tasks 24h
-      value: '.tasks.total | if . >= 100 then "99+" else . end'
-    - label: CPU
-      format: percent
-      value: .host.data.cpu * 100
-    - label: Memory
-      format: percent
-      value: .host.data.memory.used / .host.data.memory.total * 100
+      value: '.datastores.data as $all | ($all | map(select(.store == $options.datastore))) as $one | (if ($one | length) > 0 then $one else $all end) | (map(.used) | add) / (map(.total) | add) * 100'
+    - { label: Failed Tasks 24h, key: failed_tasks_24h, value: '.tasks.total | if . >= 100 then "99+" else . end' }
+    - { label: CPU, key: cpu_usage, format: percent, value: .host.data.cpu * 100 }
+    - { label: Memory, key: memory_usage, format: percent, value: .host.data.memory.used / .host.data.memory.total * 100 }
 
+# API key (Bearer) or username + password, over the REST API (v2.0). gethomepage's
+# `version: 2` (websocket API) is not supported: the REST API is used whatever `version` is.
+# Pool fields (gethomepage: enablePools) are hidden unless listed in `fields`; pool: limit to one pool.
 truenas:
-  # REST API; authenticate with an API key or with username + password.
-  defaults: { pool: "" }        # limit the pool fields to one pool; empty = all pools
+  defaults: { pool: "" }
   headers: { Authorization: ["Bearer {key}", "Basic {basic}"] }
   requests:
     alerts: /api/v2.0/alert/list
@@ -55,40 +60,63 @@ truenas:
     pools: { path: /api/v2.0/pool, optional: true }
     datasets: { path: /api/v2.0/pool/dataset, optional: true }
   fields:
-    - { label: System Load, value: ".info.loadavg[0]" }
-    - { label: Uptime, value: .info.uptime_seconds, format: duration }
-    - { label: Alerts, value: '[.alerts[] | select(.dismissed == false)] | length' }
+    - { label: System Load, key: load, value: ".info.loadavg[0]" }
+    - { label: Uptime, key: uptime, value: .info.uptime_seconds, format: duration }
+    - { label: Alerts, key: alerts, value: '[.alerts[] | select(.dismissed == false)] | length' }
     - label: Pool Used
+      hidden: true
       format: percent
       value: '[.datasets[] | select(.pool == .name and ($options.pool == "" or .name == $options.pool))] | (map(.used.parsed) | add) / (map(.used.parsed + .available.parsed) | add) * 100'
     - label: Pool Health
+      hidden: true
       format: text
       value: '[.pools[] | select($options.pool == "" or .name == $options.pool)] | if length == 0 then null elif all(.healthy) then "Healthy" else "Degraded" end'
 
+# pool1..pool4: pool names for the pool fields. Like gethomepage, only Status, CPU,
+# Memory Used % and Notifications are shown unless listed in `fields`.
 unraid:
   needs: [key]
-  defaults: { pool: cache }     # name of the pool shown by Pool Used / Pool Free
-  headers: { X-API-Key: "{key}" }
+  defaults: { pool1: "", pool2: "", pool3: "", pool4: "" }
+  headers: { X-API-Key: "{key}", Accept: application/json }
   requests:
     graphql:
       path: /graphql
       method: POST
       json:
-        query: "{ array { state capacity { kilobytes { free total used } } caches { name fsType fsSize fsFree fsUsed } } metrics { memory { percentTotal } cpu { percentTotal } } notifications { overview { unread { total } } } }"
+        query: "{ array { state capacity { kilobytes { free total used } } caches { name fsType fsSize fsFree fsUsed } } metrics { memory { active available percentTotal } cpu { percentTotal } } notifications { overview { unread { total } } } }"
   fields:
     - label: Status
+      key: status
       format: text
-      value: '.graphql.data.array.state | ascii_downcase | split("_") | join(" ") | (.[:1] | ascii_upcase) + .[1:]'
-    - { label: CPU, value: .graphql.data.metrics.cpu.percentTotal, format: percent }
-    - { label: Memory Used, value: .graphql.data.metrics.memory.percentTotal, format: percent }
-    - { label: Notifications, value: .graphql.data.notifications.overview.unread.total }
-    - { label: Array Used, value: '(.graphql.data.array.capacity.kilobytes | (.used | tonumber) / (.total | tonumber) * 100)', format: percent }
-    - { label: Array Free, value: '(.graphql.data.array.capacity.kilobytes.free | tonumber) * 1000', format: bytes }
-    - { label: Pool Used, value: '.graphql.data.array.caches[] | select(.name == $options.pool and .fsType != null) | (.fsUsed | tonumber) / (.fsSize | tonumber) * 100', format: percent }
-    - { label: Pool Free, value: '.graphql.data.array.caches[] | select(.name == $options.pool and .fsType != null) | (.fsFree | tonumber) * 1000', format: bytes }
+      value: '.graphql.data.array.state as $s | {STARTED: "Started", STOPPED: "Stopped", NEW_ARRAY: "New Array", RECON_DISK: "Reconstructing Disk", DISABLE_DISK: "Disk Disabled", SWAP_DSBL: "Swap Disable", INVALID_EXPANSION: "Invalid Expansion", PARITY_NOT_BIGGEST: "Parity Not Biggest", TOO_MANY_MISSING_DISKS: "Too Many Missing Disks", NEW_DISK_TOO_SMALL: "New Disk Too Small", NO_DATA_DISKS: "No Data Disks"}[$s] // $s'
+    - { label: Memory Available, key: memoryAvailable, hidden: true, format: bytes, value: .graphql.data.metrics.memory.available }
+    - { label: Memory Used, key: memoryUsed, hidden: true, format: bytes, value: .graphql.data.metrics.memory.active }
+    - { label: Memory Used %, key: memoryPercent, format: percent, value: .graphql.data.metrics.memory.percentTotal }
+    - { label: CPU, key: cpu, format: percent, value: .graphql.data.metrics.cpu.percentTotal }
+    - { label: Notifications, key: notifications, value: .graphql.data.notifications.overview.unread.total }
+    - { label: Array Used, key: arrayUsedSpace, hidden: true, format: bytes, value: '(.graphql.data.array.capacity.kilobytes.used | tonumber) * 1000' }
+    - { label: Array Free, key: arrayFree, hidden: true, format: bytes, value: '(.graphql.data.array.capacity.kilobytes.free | tonumber) * 1000' }
+    - { label: Array Used %, key: arrayUsedPercent, hidden: true, format: percent, value: '.graphql.data.array.capacity.kilobytes | (.used | tonumber) / (.total | tonumber) * 100' }
+    - { label: Pool 1 Used, key: pool1UsedSpace, hidden: true, format: bytes, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool1)) | (.fsUsed | tonumber) * 1000' }
+    - { label: Pool 1 Free, key: pool1FreeSpace, hidden: true, format: bytes, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool1)) | (.fsFree | tonumber) * 1000' }
+    - { label: Pool 1 Used %, key: pool1UsedPercent, hidden: true, format: percent, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool1)) | (.fsUsed | tonumber) / (.fsSize | tonumber) * 100' }
+    - { label: Pool 2 Used, key: pool2UsedSpace, hidden: true, format: bytes, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool2)) | (.fsUsed | tonumber) * 1000' }
+    - { label: Pool 2 Free, key: pool2FreeSpace, hidden: true, format: bytes, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool2)) | (.fsFree | tonumber) * 1000' }
+    - { label: Pool 2 Used %, key: pool2UsedPercent, hidden: true, format: percent, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool2)) | (.fsUsed | tonumber) / (.fsSize | tonumber) * 100' }
+    - { label: Pool 3 Used, key: pool3UsedSpace, hidden: true, format: bytes, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool3)) | (.fsUsed | tonumber) * 1000' }
+    - { label: Pool 3 Free, key: pool3FreeSpace, hidden: true, format: bytes, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool3)) | (.fsFree | tonumber) * 1000' }
+    - { label: Pool 3 Used %, key: pool3UsedPercent, hidden: true, format: percent, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool3)) | (.fsUsed | tonumber) / (.fsSize | tonumber) * 100' }
+    - { label: Pool 4 Used, key: pool4UsedSpace, hidden: true, format: bytes, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool4)) | (.fsUsed | tonumber) * 1000' }
+    - { label: Pool 4 Free, key: pool4FreeSpace, hidden: true, format: bytes, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool4)) | (.fsFree | tonumber) * 1000' }
+    - { label: Pool 4 Used %, key: pool4UsedPercent, hidden: true, format: percent, value: 'first(.graphql.data.array.caches[] | select(.fsType != null and .name == $options.pool4)) | (.fsUsed | tonumber) / (.fsSize | tonumber) * 100' }
 
+# method: services.getStatus, smart.getListBg or downloader.getDownloadList (as in gethomepage).
+# smart.getListBg is read with the synchronous smart.getList (no background job polling).
 openmediavault:
-  needs: [username, password]
+  needs: [username, password, method]
+  computed:
+    rpc_service: '$options.method | split(".")[0]'
+    rpc_method: '$options.method | split(".")[1] | sub("Bg$"; "")'
   login:
     path: /rpc.php
     method: POST
@@ -97,18 +125,23 @@ openmediavault:
     expired: '.error.code? | . == 5000 or . == 5001'   # "session not authenticated" answered with 200
   headers: { Cookie: "{token}" }
   requests:
-    services:
+    rpc:
       path: /rpc.php
       method: POST
-      json: { service: services, method: getStatus, params: { start: 0, limit: -1 } }
+      json: { service: "{rpc_service}", method: "{rpc_method}", params: { start: 0, limit: -1 } }
   fields:
-    - { label: Running, value: '[.services.response.data[] | select(.running)] | length' }
-    - { label: Stopped, value: '[.services.response.data[] | select(.running | not)] | length' }
-    - { label: Total, value: '.services.response.data | length' }
+    - { label: Running, key: running, when: '$options.method == "services.getStatus"', value: '[.rpc.response.data[] | select(.running)] | length' }
+    - { label: Stopped, key: stopped, when: '$options.method == "services.getStatus"', value: '[.rpc.response.data[] | select(.running | not)] | length' }
+    - { label: Downloading, key: downloading, when: '$options.method == "downloader.getDownloadList"', value: '[.rpc.response.data[] | select(.downloading)] | length' }
+    - { label: Total, key: total, when: '$options.method == "services.getStatus" or $options.method == "downloader.getDownloadList"', value: '.rpc.response.data | length' }
+    - { label: Passed, key: passed, when: '$options.method | startswith("smart.")', value: '[.rpc.response.data[] | select(.monitor and .overallstatus == "GOOD")] | length' }
+    - { label: Failed, key: failed, when: '$options.method | startswith("smart.")', value: '[.rpc.response.data[] | select(.monitor and .overallstatus != "GOOD")] | length' }
 
+# volume: volume name (e.g. volume_1); the first volume when unset.
+# API versions are fixed (Auth v7, Core.System v1) instead of discovered through SYNO.API.Info.
 diskstation:
   needs: [username, password]
-  defaults: { volume: "" }      # volume name (e.g. volume_1); empty = first volume
+  defaults: { volume: "" }
   login:
     path: "/webapi/entry.cgi?api=SYNO.API.Auth&version=7&method=login&account={username}&passwd={password}&session=DownloadStation&format=cookie"
     cookie: id
@@ -120,30 +153,48 @@ diskstation:
     utilization: "/webapi/entry.cgi?api=SYNO.Core.System.Utilization&version=1&method=get"
   fields:
     - label: Uptime
+      key: uptime
       format: duration
       value: '.info.data.up_time | split(":") | map(tonumber) | .[0] * 3600 + .[1] * 60 + .[2]'
+    - label: Available
+      key: volumeAvailable
+      format: bytes
+      value: '(if $options.volume == "" then .storage.data.vol_info[0] else first(.storage.data.vol_info[] | select(.name == $options.volume)) end) | (.total_size | tonumber) - (.used_size | tonumber)'
     - label: CPU
+      key: resources.cpu
       format: percent
       value: '.utilization.data.cpu | (.user_load | tonumber) + (.system_load | tonumber)'
-    - label: Memory
+    - label: MEM
+      key: resources.mem
       format: percent
       value: '.utilization.data.memory | if .real_usage then (.real_usage | tonumber) else 100 - 100 * ((.avail_real | tonumber) + (.cached | tonumber)) / (.total_real | tonumber) end'
-    - label: Available
-      format: bytes
-      value: '[.storage.data.vol_info[] | select($options.volume == "" or .name == $options.volume)][0] | (.total_size | tonumber) - (.used_size | tonumber)'
 
+# env = Portainer environment (endpoint) id. kubernetes: true for a Kubernetes environment.
 portainer:
-  needs: [env, key]   # env = Portainer environment (endpoint) id
+  needs: [env, key]
+  defaults: { kubernetes: "false" }
+  computed:
+    docker: 'if $options.kubernetes == "true" then null else "" end'
+    k8s: 'if $options.kubernetes == "true" then "" else null end'
   headers: { X-API-Key: "{key}" }
   requests:
-    containers: "/api/endpoints/{env}/docker/containers/json?all=1"
+    containers: { path: "/api/endpoints/{env}/docker/containers/json{docker}", query: { all: "1" }, optional: true }
+    applications: { path: "/api/kubernetes/{env}/applications/count{k8s}", optional: true }
+    services: { path: "/api/kubernetes/{env}/services/count{k8s}", optional: true }
+    namespaces: { path: "/api/kubernetes/{env}/namespaces/count{k8s}", optional: true }
   fields:
-    - { label: Running, value: '[.containers[] | select(.State == "running")] | length' }
-    - { label: Stopped, value: '[.containers[] | select(.State == "exited")] | length' }
-    - { label: Total, value: '.containers | length' }
+    - { label: Running, key: running, when: '$options.kubernetes != "true"', value: '[.containers[] | select(.State == "running")] | length' }
+    - { label: Stopped, key: stopped, when: '$options.kubernetes != "true"', value: '[.containers[] | select(.State == "exited")] | length' }
+    - { label: Total, key: total, when: '$options.kubernetes != "true"', value: '.containers | length' }
+    - { label: Applications, key: applications, when: '$options.kubernetes == "true"', value: .applications }
+    - { label: Services, key: services, when: '$options.kubernetes == "true"', value: .services }
+    - { label: Namespaces, key: namespaces, when: '$options.kubernetes == "true"', value: .namespaces }
 
+# showStacks: true counts stacks instead of containers in Total / Running / Unhealthy / Unknown.
+# showSummary: true shows Servers / Stacks / Containers by default instead.
 komodo:
   needs: [key, secret]
+  defaults: { showStacks: "false", showSummary: "false" }
   headers: { X-API-Key: "{key}", X-API-Secret: "{secret}" }
   requests:
     containers:
@@ -159,64 +210,112 @@ komodo:
       method: POST
       json: { type: GetServersSummary, params: {} }
   fields:
-    - { label: Total, value: .containers.total }
-    - { label: Running, value: .containers.running }
-    - { label: Stopped, value: .containers.stopped }
-    - { label: Unhealthy, value: .containers.unhealthy }
-    - { label: Servers, value: '"\(.servers.healthy) / \(.servers.total)"', format: text }
-    - { label: Stacks, value: '"\(.stacks.running) / \(.stacks.total)"', format: text }
+    - { label: Total, key: total, when: '$options.showSummary != "true"', value: 'if $options.showStacks == "true" then .stacks.total else .containers.total end' }
+    - { label: Running, key: running, when: '$options.showSummary != "true"', value: 'if $options.showStacks == "true" then .stacks.running else .containers.running end' }
+    - { label: Stopped, key: stopped, when: '$options.showSummary != "true" and $options.showStacks != "true"', value: .containers.stopped }
+    - { label: Down, key: down, when: '$options.showSummary != "true" and $options.showStacks == "true"', value: .stacks.stopped + .stacks.down }
+    - { label: Unhealthy, key: unhealthy, when: '$options.showSummary != "true"', value: 'if $options.showStacks == "true" then .stacks.unhealthy else .containers.unhealthy end' }
+    - { label: Unknown, key: unknown, hidden: true, value: 'if $options.showStacks == "true" then .stacks.unknown else .containers.unknown end' }
+    - { label: Servers, key: servers, when: '$options.showSummary == "true"', format: text, value: '"\(.servers.healthy) / \(.servers.total)"' }
+    - { label: Stacks, key: stacks, when: '$options.showSummary == "true"', format: text, value: '"\(.stacks.running) / \(.stacks.total)"' }
+    - { label: Containers, key: containers, when: '$options.showSummary == "true"', format: text, value: '"\(.containers.running) / \(.containers.total)"' }
 
+# API key (Bearer) or username + password (session login). environment: name or id; all when unset.
+# Like gethomepage, only Running, Total, CPU and Memory are shown unless listed in `fields`.
 dockhand:
-  # Authenticates with an API key when set (no session login).
-  defaults: { environment: "" }   # environment name or id; empty = all environments
-  headers: { Authorization: "Bearer {key}" }
+  defaults: { environment: "" }
+  login:
+    path: /api/auth/login
+    method: POST
+    json: { username: "{username}", password: "{password}" }
+    cookie: "*"
+  headers: { Authorization: "Bearer {key}", Cookie: "{token}" }
   requests:
     stats: /api/dashboard/stats
   fields:
-    - { label: Running, value: '[.stats[] | select($options.environment == "" or (.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment) | (.containers.running // 0)] | add' }
-    - { label: Total, value: '[.stats[] | select($options.environment == "" or (.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment) | (.containers.total // 0)] | add' }
-    - { label: CPU, value: '[.stats[] | select($options.environment == "" or (.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment) | (.metrics.cpuPercent // 0)] | add / length', format: percent }
-    - { label: Memory, value: '[.stats[] | select($options.environment == "" or (.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment) | (.metrics.memoryPercent // 0)] | add / length', format: percent }
+    - { label: Running, key: running, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | map(.containers.running // 0) | add' }
+    - { label: Stopped, key: stopped, hidden: true, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | if $options.environment == "" then (map(.containers.total // 0) | add) - (map(.containers.running // 0) | add) else .[0].containers | .stopped // ((.total // 0) - (.running // 0)) end' }
+    - { label: Paused, key: paused, hidden: true, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | map(.containers.paused // 0) | add' }
+    - { label: Pending Updates, key: pending_updates, hidden: true, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | map(.containers.pendingUpdates // 0) | add' }
+    - { label: Total, key: total, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | map(.containers.total // 0) | add' }
+    - { label: CPU, key: cpu, format: percent, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | if length == 0 then 0 else (map(.metrics.cpuPercent // 0) | add) / length end' }
+    - { label: Memory, key: memory, format: percent, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | if length == 0 then 0 else (map(.metrics.memoryPercent // 0) | add) / length end' }
+    - { label: Images, key: images, hidden: true, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | map(.images.total // 0) | add' }
+    - { label: Volumes, key: volumes, hidden: true, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | map(.volumes.total // 0) | add' }
+    - { label: Stacks, key: stacks, hidden: true, format: text, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | "\(map(.stacks.running // 0) | add) / \(map(.stacks.total // 0) | add)"' }
+    - { label: Events Today, key: events_today, hidden: true, value: 'def envs: if $options.environment == "" then . else map(select((.name | tostring | ascii_downcase) == ($options.environment | ascii_downcase) or (.id | tostring) == $options.environment)) | .[:1] end; .stats | envs | map(.events.today // 0) | add' }
 
+# env = Arcane environment id (0 = local). Like gethomepage, only Running, Stopped, Total and
+# Image Updates are shown unless listed in `fields`.
 arcane:
-  needs: [env, key]   # env = Arcane environment id
+  needs: [env, key]
   headers: { X-API-Key: "{key}" }
   requests:
     containers: "/api/environments/{env}/containers/counts"
+    images: "/api/environments/{env}/images/counts"
     updates: "/api/environments/{env}/image-updates/summary"
   fields:
-    - { label: Running, value: '.containers.data.runningContainers // 0' }
-    - { label: Stopped, value: '.containers.data.stoppedContainers // 0' }
-    - { label: Total, value: '.containers.data.totalContainers // 0' }
-    - { label: Image Updates, value: '.updates.data.imagesWithUpdates // 0' }
+    - { label: Running, key: running, value: '.containers.data.runningContainers // 0' }
+    - { label: Stopped, key: stopped, value: '.containers.data.stoppedContainers // 0' }
+    - { label: Total, key: total, value: '.containers.data.totalContainers // 0' }
+    - { label: Images, key: images, hidden: true, value: '.images.data.totalImages // 0' }
+    - { label: Used, key: images_used, hidden: true, value: '.images.data.imagesInuse // 0' }
+    - { label: Unused, key: images_unused, hidden: true, value: '.images.data.imagesUnused // 0' }
+    - { label: Image Updates, key: image_updates, value: '.updates.data.imagesWithUpdates // 0' }
 
+# metric (as in gethomepage): info, cpu, memory, network:<iface>, disk:<device>, sensor:<label>,
+# gpu:<id>, fs:<mount point>. Current values only (no charts); process and containers lists are
+# not supported. version: Glances API version (3 or 4).
 glances:
-  defaults: { version: "4", fs: "/" }   # Glances API version (3 or 4); mount point for Disk Used
+  defaults: { version: "3", metric: info }
+  computed:
+    v_info: 'if $options.metric == "info" then $options.version else null end'
+    v_cpu: 'if $options.metric == "cpu" then $options.version else null end'
+    v_mem: 'if $options.metric == "memory" then $options.version else null end'
+    v_net: 'if ($options.metric | startswith("network:")) then $options.version else null end'
+    v_disk: 'if ($options.metric | startswith("disk:")) then $options.version else null end'
+    v_sensor: 'if ($options.metric | startswith("sensor:")) then $options.version else null end'
+    v_gpu: 'if ($options.metric | startswith("gpu:")) then $options.version else null end'
+    v_fs: 'if ($options.metric | startswith("fs:")) then $options.version else null end'
   headers: { Authorization: "Basic {basic}" }
   requests:
-    quicklook: "/api/{version}/quicklook"
-    load: "/api/{version}/load"
-    fs: { path: "/api/{version}/fs", optional: true }
-    sensors: { path: "/api/{version}/sensors", optional: true }
+    quicklook: { path: "/api/{v_info}/quicklook", optional: true }
+    cpu: { path: "/api/{v_cpu}/cpu", optional: true }
+    mem: { path: "/api/{v_mem}/mem", optional: true }
+    network: { path: "/api/{v_net}/network", optional: true }
+    diskio: { path: "/api/{v_disk}/diskio", optional: true }
+    sensors: { path: "/api/{v_sensor}/sensors", optional: true }
+    gpu: { path: "/api/{v_gpu}/gpu", optional: true }
+    fs: { path: "/api/{v_fs}/fs", optional: true }
   fields:
-    - { label: CPU, value: .quicklook.cpu, format: percent }
-    - { label: Mem, value: .quicklook.mem, format: percent }
-    - { label: Swap, value: .quicklook.swap, format: percent }
-    - { label: Load, value: .load.min1 }
-    - { label: Disk Used, value: '.fs[] | select(.mnt_point == $options.fs) | .percent', format: percent }
-    - { label: Temp, value: '[.sensors[] | select(.type == "temperature_core") | .value] | max' }
+    - { label: CPU, when: '$options.metric == "info" or $options.metric == "cpu"', format: percent, value: '.cpu.total // .quicklook.cpu' }
+    - { label: Mem, when: '$options.metric == "info" or ($options.metric | startswith("gpu:"))', format: percent, value: '.quicklook.mem // first(.gpu[]? | select((.[.key] | tostring) == ($options.metric | split(":")[1:] | join(":")))).mem' }
+    - { label: Swap, when: '$options.metric == "info"', format: percent, value: .quicklook.swap }
+    - { label: GPU, when: '$options.metric | startswith("gpu:")', format: percent, value: 'first(.gpu[] | select((.[.key] | tostring) == ($options.metric | split(":")[1:] | join(":")))).proc' }
+    - { label: Used, when: '$options.metric == "memory" or ($options.metric | startswith("fs:"))', format: bytes, value: '.mem.used // first(.fs[]? | select(.[.key] == ($options.metric | split("fs:")[1]))).used' }
+    - { label: Free, when: '$options.metric == "memory" or ($options.metric | startswith("fs:"))', format: bytes, value: '.mem.available // first(.fs[]? | select(.[.key] == ($options.metric | split("fs:")[1]))).free' }
+    - { label: Total, when: '$options.metric == "memory" or ($options.metric | startswith("fs:"))', format: bytes, value: '.mem.total // first(.fs[]? | select(.[.key] == ($options.metric | split("fs:")[1]))).size' }
+    - { label: RX, when: '$options.metric | startswith("network:")', format: bitrate, value: 'first(.network[] | select(.[.key] == ($options.metric | split(":")[1:] | join(":")))) | (.rx // .bytes_recv) * 8 / .time_since_update' }
+    - { label: TX, when: '$options.metric | startswith("network:")', format: bitrate, value: 'first(.network[] | select(.[.key] == ($options.metric | split(":")[1:] | join(":")))) | (.tx // .bytes_sent) * 8 / .time_since_update' }
+    - { label: Read, when: '$options.metric | startswith("disk:")', format: rate, value: 'first(.diskio[] | select(.disk_name == ($options.metric | split(":")[1:] | join(":")))) | .read_bytes / .time_since_update' }
+    - { label: Write, when: '$options.metric | startswith("disk:")', format: rate, value: 'first(.diskio[] | select(.disk_name == ($options.metric | split(":")[1:] | join(":")))) | .write_bytes / .time_since_update' }
+    - { label: Temp, when: '($options.metric | startswith("sensor:")) or ($options.metric | startswith("gpu:"))', value: 'first(.sensors[]? | select(.label == ($options.metric | split(":")[1:] | join(":")))).value // first(.gpu[]? | select((.[.key] | tostring) == ($options.metric | split(":")[1:] | join(":")))).temperature' }
+    - { label: Warn, when: '$options.metric | startswith("sensor:")', value: 'first(.sensors[] | select(.label == ($options.metric | split(":")[1:] | join(":")))).warning' }
+    - { label: Crit, when: '$options.metric | startswith("sensor:")', value: 'first(.sensors[] | select(.label == ($options.metric | split(":")[1:] | join(":")))).critical' }
 
 netdata:
   headers: { Authorization: "Basic {basic}" }
   requests:
     info: /api/v1/info
   fields:
-    - { label: Warnings, value: .info.alarms.warning }
-    - { label: Criticals, value: .info.alarms.critical }
+    - { label: Warnings, key: warnings, value: .info.alarms.warning }
+    - { label: Criticals, key: criticals, value: .info.alarms.critical }
 
+# Logs in as a superuser (PocketBase >= 0.23, Beszel >= 0.9; gethomepage `version: 2`).
+# The older admins login (`version: 1`) is not supported. systemId: system id or name.
 beszel:
   needs: [username, password]
-  defaults: { systemId: "" }    # system id or name; empty = all systems
+  defaults: { systemId: "" }
   login:
     path: /api/collections/_superusers/auth-with-password
     method: POST
@@ -224,32 +323,43 @@ beszel:
     token: .token
   headers: { Authorization: "Bearer {token}" }
   requests:
-    systems: "/api/collections/systems/records?page=1&perPage=500"
+    systems: { path: /api/collections/systems/records, query: { page: "1", perPage: "500", sort: "+created" } }
   fields:
-    - { label: Systems, value: '.systems.items | length' }
-    - { label: Up, value: '[.systems.items[] | select(.status == "up")] | length' }
-    - { label: Down, value: '[.systems.items[] | select(.status == "down")] | length' }
-    - { label: CPU, format: percent, value: '[.systems.items[] | select($options.systemId == "" or .id == $options.systemId or .name == $options.systemId) | .info.cpu] | add / length' }
-    - { label: Memory, format: percent, value: '[.systems.items[] | select($options.systemId == "" or .id == $options.systemId or .name == $options.systemId) | .info.mp] | add / length' }
-    - { label: Disk, format: percent, value: '[.systems.items[] | select($options.systemId == "" or .id == $options.systemId or .name == $options.systemId) | .info.dp] | add / length' }
-    - { label: Network, format: rate, value: '[.systems.items[] | select($options.systemId == "" or .id == $options.systemId or .name == $options.systemId) | .info.bb] | add' }
+    - { label: Systems, key: systems, when: '$options.systemId == ""', value: .systems.totalItems }
+    - { label: Up, key: up, when: '$options.systemId == ""', format: text, value: '"\([.systems.items[] | select(.status == "up")] | length) / \(.systems.totalItems)"' }
+    - { label: Name, key: name, when: '$options.systemId != ""', format: text, value: 'first(.systems.items[] | select(.id == $options.systemId or .name == $options.systemId)).name' }
+    - { label: Status, key: status, when: '$options.systemId != ""', format: text, value: 'first(.systems.items[] | select(.id == $options.systemId or .name == $options.systemId)).status | {up: "Up", down: "Down", paused: "Paused", pending: "Pending"}[.] // .' }
+    - { label: Updated, key: updated, hidden: true, format: ago, value: 'first(.systems.items[] | select(.id == $options.systemId or .name == $options.systemId)).updated | .[:19] | sub(" "; "T") + "Z" | fromdateiso8601' }
+    - { label: CPU, key: cpu, when: '$options.systemId != ""', format: percent, value: 'first(.systems.items[] | select(.id == $options.systemId or .name == $options.systemId)).info.cpu' }
+    - { label: MEM, key: memory, when: '$options.systemId != ""', format: percent, value: 'first(.systems.items[] | select(.id == $options.systemId or .name == $options.systemId)).info.mp' }
+    - { label: Disk, key: disk, hidden: true, format: percent, value: 'first(.systems.items[] | select(.id == $options.systemId or .name == $options.systemId)).info.dp' }
+    - { label: NET, key: network, hidden: true, format: rate, value: 'first(.systems.items[] | select(.id == $options.systemId or .name == $options.systemId)).info.bb' }
 
+# version: 2 for Pulse v6 and later (/api/state/summary), 1 (default) for /api/resources.
 pulse:
   needs: [key]
+  defaults: { version: "1" }
+  computed:
+    v1: 'if $options.version == "2" then null else "" end'
+    v2: 'if $options.version == "2" then "" else null end'
   headers: { X-API-Token: "{key}" }
   requests:
-    resources: { path: /api/resources, optional: true }    # Pulse v1
-    summary: { path: /api/state/summary, optional: true }  # Pulse v6 and later
+    resources: { path: "/api/resources{v1}", optional: true }
+    summary: { path: "/api/state/summary{v2}", optional: true }
   fields:
-    - label: Nodes
+    -
+      label: Nodes
+      key: nodes
       format: text
-      value: 'def n($t): [(.resources.resources // [])[] | select(.type == $t)] as $l | (.resources.stats.byType[$t] // ($l | length)) as $total | if .resources.resources then "\([$l[] | select(.status == "online" or .status == "running")] | length) / \($total)" else $total end; .summary.nodes // n("node")'
+      value: 'def n($t): .resources as $d | ($d.resources // (if $d.count == 0 then [] else null end)) as $r | (($d.stats.byType[$t] | select(type == "number")) // ($r | if . == null then null else map(select(.type == $t)) | length end)) as $total | if $total == null then null elif $r == null then $total else "\($r | map(select(.type == $t and (.status == "online" or .status == "running"))) | length) / \($total)" end; if .summary then .summary.nodes else n("node") end'
     - label: VMs
+      key: vms
       format: text
-      value: 'def n($t): [(.resources.resources // [])[] | select(.type == $t)] as $l | (.resources.stats.byType[$t] // ($l | length)) as $total | if .resources.resources then "\([$l[] | select(.status == "online" or .status == "running")] | length) / \($total)" else $total end; .summary.vms // n("vm")'
+      value: 'def n($t): .resources as $d | ($d.resources // (if $d.count == 0 then [] else null end)) as $r | (($d.stats.byType[$t] | select(type == "number")) // ($r | if . == null then null else map(select(.type == $t)) | length end)) as $total | if $total == null then null elif $r == null then $total else "\($r | map(select(.type == $t and (.status == "online" or .status == "running"))) | length) / \($total)" end; if .summary then .summary.vms else n("vm") end'
     - label: LXCs
+      key: lxcs
       format: text
-      value: 'def n($t): [(.resources.resources // [])[] | select(.type == $t)] as $l | (.resources.stats.byType[$t] // ($l | length)) as $total | if .resources.resources then "\([$l[] | select(.status == "online" or .status == "running")] | length) / \($total)" else $total end; .summary.containers // n("container")'
+      value: 'def n($t): .resources as $d | ($d.resources // (if $d.count == 0 then [] else null end)) as $r | (($d.stats.byType[$t] | select(type == "number")) // ($r | if . == null then null else map(select(.type == $t)) | length end)) as $total | if $total == null then null elif $r == null then $total else "\($r | map(select(.type == $t and (.status == "online" or .status == "running"))) | length) / \($total)" end; if .summary then .summary.containers else n("container") end'
 
 scrutiny:
   headers: { Authorization: "Basic {basic}" }
@@ -258,110 +368,131 @@ scrutiny:
     settings: /api/settings
   fields:
     - label: Passed
+      key: passed
       value: '.settings.settings.metrics.status_threshold as $t | [.summary.data.summary[].device | select(.archived | not) | .device_status] as $s | ($s | length) - ($s | map(select((. >= 1 and . <= 3 and $t == 3) or . == $t or . == 3)) | length) - ($s | map(select(. < 0 or . > 3)) | length)'
     - label: Failed
+      key: failed
       value: '.settings.settings.metrics.status_threshold as $t | [.summary.data.summary[].device | select(.archived | not) | .device_status] | map(select((. >= 1 and . <= 3 and $t == 3) or . == $t or . == 3)) | length'
     - label: Unknown
+      key: unknown
       value: '[.summary.data.summary[].device | select(.archived | not) | .device_status] | map(select(. < 0 or . > 3)) | length'
 
+# slug: status page slug.
 uptimekuma:
-  needs: [slug]   # status page slug
+  needs: [slug]
   headers: { Authorization: "Basic {basic}" }
   requests:
     page: "/api/status-page/{slug}"
     heartbeat: "/api/status-page/heartbeat/{slug}"
   fields:
-    - { label: Sites Up, value: '[.heartbeat.heartbeatList[] | select((last | .status) == 1)] | length' }
-    - { label: Sites Down, value: '[.heartbeat.heartbeatList[] | select((last | .status) != 1)] | length' }
-    - { label: Uptime, value: '([.heartbeat.uptimeList[]] | add / length) * 100', format: percent }
-    - { label: Incident, format: ago, value: '.page.incident.createdDate | select(. != null) | .[:19] | sub(" "; "T") + "Z" | fromdateiso8601' }
+    - { label: Sites Up, key: up, value: '[.heartbeat.heartbeatList[] | select((last | .status) == 1)] | length' }
+    - { label: Sites Down, key: down, value: '[.heartbeat.heartbeatList[] | select((last | .status) != 1)] | length' }
+    - { label: Uptime, key: uptime, format: percent, value: '[.heartbeat.uptimeList[]] | if length == 0 then 0 else add / length * 100 end' }
+    - { label: Incident, key: incident, format: ago, when: '.page.incident != null', value: '.page.incident.createdDate | select(. != null) | .[:19] | sub(" "; "T") + "Z" | fromdateiso8601' }
 
 gatus:
   headers: { Authorization: "Basic {basic}" }
   requests:
     status: /api/v1/endpoints/statuses
   fields:
-    - { label: Sites Up, value: '[.status[] | select(((.results // []) | last | .success) == true)] | length' }
-    - { label: Sites Down, value: '[.status[] | select(((.results // []) | last | .success) != true)] | length' }
-    - { label: Uptime, value: '[.status[].results[]?] | (map(select(.success == true)) | length) / length * 100', format: percent }
+    - { label: Sites Up, key: up, value: '[.status[] | select(((.results // []) | last | .success) == true)] | length' }
+    - { label: Sites Down, key: down, value: '[.status[] | select(((.results // []) | last | .success) != true)] | length' }
+    - { label: Uptime, key: uptime, format: percent, value: '[.status[].results[]?] | (map(select(.success == true)) | length) / length * 100' }
 
+# uuid: one check (Status, Last Ping); all checks (Up, Down) when unset.
 healthchecks:
   needs: [key]
-  defaults: { uuid: "" }   # check uuid for Status / Last Ping; empty = all checks
+  defaults: { uuid: "" }
   headers: { X-Api-Key: "{key}" }
   requests:
-    checks: /api/v3/checks/
+    checks: "/api/v3/checks/{uuid}"
   fields:
-    - { label: Up, value: '[.checks.checks[] | select(.status == "up")] | length' }
-    - { label: Down, value: '[.checks.checks[] | select(.status == "down")] | length' }
-    - label: Status
-      format: text
-      value: '[.checks.checks[] | select($options.uuid == "" or .uuid == $options.uuid or .unique_key == $options.uuid)] | if length == 0 then null elif any(.status == "down") then "Down" elif any(.status == "grace") then "In Grace Period" elif all(.status == "paused") then "Paused" elif all(.status == "new") then "New" else "Up" end'
-    - label: Last Ping
-      format: ago
-      value: '[.checks.checks[] | select($options.uuid == "" or .uuid == $options.uuid or .unique_key == $options.uuid) | .last_ping | select(. != null) | .[:19] + "Z" | fromdateiso8601] | max'
+    - { label: Up, key: up, when: '$options.uuid == ""', value: '[.checks.checks[]? | select(.status == "up")] | length' }
+    - { label: Down, key: down, when: '$options.uuid == ""', value: '[.checks.checks[]? | select(.status == "down")] | length' }
+    - { label: Status, key: status, when: '$options.uuid != ""', format: text, value: '.checks.status | {new: "New", up: "Up", grace: "In Grace Period", down: "Down", paused: "Paused"}[.] // .' }
+    - { label: Last Ping, key: last_ping, when: '$options.uuid != ""', format: ago, value: '.checks | select(has("status")) | .last_ping | if . then .[:19] + "Z" | fromdateiso8601 else "No pings yet" end' }
 
+# Like gethomepage: Sites Up / Down for several monitors; Status, Uptime and the last downtime
+# for an API key limited to one monitor.
 uptimerobot:
   needs: [key]
-  defaults: { monitor: "" }   # monitor id(s), dash separated; empty = all monitors
+  defaults: { url: "https://api.uptimerobot.com" }
   requests:
     monitors:
       path: "/v2/getMonitors?api_key={key}"
       method: POST
-      form: { format: json, logs: "1", monitors: "{monitor}" }
+      headers: { Cache-Control: no-cache }
+      form: { format: json, logs: "1" }
   fields:
-    - { label: Sites Up, value: '[.monitors.monitors[] | select(.status == 2)] | length' }
-    - { label: Sites Down, value: '.monitors.pagination.total - ([.monitors.monitors[] | select(.status == 2)] | length)' }
+    - { label: Sites Up, key: sitesUp, when: '.monitors.pagination.total > 1', value: '[.monitors.monitors[] | select(.status == 2)] | length' }
+    - { label: Sites Down, key: sitesDown, when: '.monitors.pagination.total > 1', value: '.monitors.pagination.total - ([.monitors.monitors[] | select(.status == 2)] | length)' }
     - label: Status
+      key: status
       format: text
-      value: 'if .monitors.pagination.total == 1 then .monitors.monitors[0].status | if . == 0 then "Paused" elif . == 1 then "Not Yet Checked" elif . == 2 then "Up" elif . == 8 then "Seems Down" elif . == 9 then "Down" else "Unknown" end else null end'
+      when: '.monitors.pagination.total <= 1'
+      value: '.monitors.monitors[0].status | if . == 0 then "Paused" elif . == 1 then "Not Yet Checked" elif . == 2 then "Up" elif . == 8 then "Seems Down" elif . == 9 then "Down" else "Unknown" end'
     - label: Uptime
+      key: uptime
       format: duration
-      value: 'if .monitors.pagination.total == 1 and .monitors.monitors[0].status == 2 then ([.monitors.monitors[0].logs[]? | select(.type == 2)][0].duration // 0) else null end'
+      when: '.monitors.pagination.total <= 1'
+      value: 'if .monitors.monitors[0].status == 2 then (first(.monitors.monitors[0].logs[]? | select(.type == 2)).duration // 0) else 0 end'
     - label: Last Downtime
+      key: lastDown
       format: ago
-      value: 'if .monitors.pagination.total == 1 then [.monitors.monitors[0].logs[]? | select(.type == 1)][0].datetime else null end'
+      when: '.monitors.pagination.total <= 1 and any(.monitors.monitors[0].logs[]?; .type == 1)'
+      value: 'first(.monitors.monitors[0].logs[]? | select(.type == 1)).datetime'
     - label: Downtime Duration
+      key: downDuration
       format: duration
-      value: 'if .monitors.pagination.total == 1 then [.monitors.monitors[0].logs[]? | select(.type == 1)][0].duration else null end'
+      when: '.monitors.pagination.total <= 1 and any(.monitors.monitors[0].logs[]?; .type == 1)'
+      value: 'first(.monitors.monitors[0].logs[]? | select(.type == 1)).duration'
 
 prometheus:
   headers: { Authorization: "Basic {basic}" }
   requests:
     targets: "/api/v1/targets?state=active"
   fields:
-    - { label: Targets Up, value: '[.targets.data.activeTargets[] | select(.health == "up")] | length' }
-    - { label: Targets Down, value: '[.targets.data.activeTargets[] | select(.health == "down")] | length' }
-    - { label: Total Targets, value: '.targets.data.activeTargets | length' }
+    - { label: Targets Up, key: targets_up, value: '[.targets.data.activeTargets[] | select(.health == "up")] | length' }
+    - { label: Targets Down, key: targets_down, value: '[.targets.data.activeTargets[] | select(.health == "down")] | length' }
+    - { label: Total Targets, key: targets_total, value: '.targets.data.activeTargets | length' }
 
+# Needs an account allowed to read /api/admin/stats (Grafana admin).
+# version 1 (default): legacy alerts, else Grafana alertmanager; version 2: the `alerts`
+# alertmanager (grafana or alertmanager).
 grafana:
-  # Needs an account allowed to read /api/admin/stats (Grafana admin).
-  defaults: { alerts: grafana }   # alertmanager to count: grafana or alertmanager
+  defaults: { version: "1", alerts: grafana }
+  computed:
+    legacy: 'if $options.version == "2" then null else "" end'
+    am: 'if $options.version == "2" then $options.alerts else "grafana" end'
   headers: { Authorization: "Basic {basic}" }
   requests:
     stats: /api/admin/stats
-    legacy: { path: /api/alerts, optional: true }   # legacy alerting, gone in recent Grafana
-    active: { path: "/api/alertmanager/{alerts}/api/v2/alerts", optional: true }
+    legacy: { path: "/api/alerts{legacy}", optional: true }
+    active: { path: "/api/alertmanager/{am}/api/v2/alerts", optional: true }
   fields:
-    - { label: Dashboards, value: .stats.dashboards }
-    - { label: Data Sources, value: .stats.datasources }
-    - { label: Total Alerts, value: .stats.alerts }
-    - { label: Alerts Triggered, value: 'if (.legacy | type) == "array" and (.legacy | length) > 0 then [.legacy[] | select(.state == "alerting")] | length else (.active // []) | length end' }
+    - { label: Dashboards, key: dashboards, value: .stats.dashboards }
+    - { label: Data Sources, key: datasources, value: .stats.datasources }
+    - { label: Total Alerts, key: totalalerts, value: .stats.alerts }
+    - { label: Alerts Triggered, key: alertstriggered, value: 'if (.legacy | type) == "array" and (.legacy | length) > 0 then [.legacy[] | select(.state == "alerting")] | length else (.active // []) | length end' }
 
+# snapshotHost / snapshotPath: pick a snapshot source; the first one when unset.
 kopia:
-  defaults: { snapshotHost: "", snapshotPath: "" }   # pick a snapshot source; empty = first one
+  defaults: { snapshotHost: "", snapshotPath: "" }
   headers: { Authorization: "Basic {basic}" }
   requests:
     status: /api/v1/sources
   fields:
-    - { label: Status, value: '[.status.sources[] | select(($options.snapshotHost == "" or .source.host == $options.snapshotHost) and ($options.snapshotPath == "" or .source.path == $options.snapshotPath))][0].status', format: text }
-    - { label: Size, value: '[.status.sources[] | select(($options.snapshotHost == "" or .source.host == $options.snapshotHost) and ($options.snapshotPath == "" or .source.path == $options.snapshotPath))][0].lastSnapshot.stats.totalSize', format: bytes }
+    - { label: Status, key: status, format: text, value: 'first(.status.sources[] | select(($options.snapshotHost == "" or .source.host == $options.snapshotHost) and ($options.snapshotPath == "" or .source.path == $options.snapshotPath))).status' }
+    - { label: Size, key: size, format: bytes, value: 'first(.status.sources[] | select(($options.snapshotHost == "" or .source.host == $options.snapshotHost) and ($options.snapshotPath == "" or .source.path == $options.snapshotPath))).lastSnapshot.stats.totalSize' }
     - label: Last Run
+      key: lastrun
       format: ago
-      value: '[.status.sources[] | select(($options.snapshotHost == "" or .source.host == $options.snapshotHost) and ($options.snapshotPath == "" or .source.path == $options.snapshotPath))][0] | if (.lastSnapshot.stats.errorCount // 0) == 0 then .lastSnapshot.startTime[:19] + "Z" | fromdateiso8601 else "Failed" end'
+      value: 'first(.status.sources[] | select(($options.snapshotHost == "" or .source.host == $options.snapshotHost) and ($options.snapshotPath == "" or .source.path == $options.snapshotPath))) | if .lastSnapshot.stats.errorCount == 0 then .lastSnapshot.startTime[:19] + "Z" | fromdateiso8601 else "Failed" end'
     - label: Next Run
+      key: nextrun
       format: duration
-      value: '[.status.sources[] | select(($options.snapshotHost == "" or .source.host == $options.snapshotHost) and ($options.snapshotPath == "" or .source.path == $options.snapshotPath))][0].nextSnapshotTime | select(. != null) | (.[:19] + "Z" | fromdateiso8601) - now | if . < 0 then 0 else . end'
+      when: 'first(.status.sources[] | select(($options.snapshotHost == "" or .source.host == $options.snapshotHost) and ($options.snapshotPath == "" or .source.path == $options.snapshotPath))).nextSnapshotTime != null'
+      value: 'first(.status.sources[] | select(($options.snapshotHost == "" or .source.host == $options.snapshotHost) and ($options.snapshotPath == "" or .source.path == $options.snapshotPath))).nextSnapshotTime | select(. != null) | (.[:19] + "Z" | fromdateiso8601) - now | if . < 0 then 0 else . end'
 
 backrest:
   headers: { Authorization: "Basic {basic}" }
@@ -371,13 +502,14 @@ backrest:
       method: POST
       json: {}
   fields:
-    - { label: Plans, value: '.summary.planSummaries | length' }
-    - { label: Succeeding, value: '[.summary.planSummaries[] | select(.recentBackups.status[0]? == "STATUS_SUCCESS")] | length' }
-    - { label: Failing, value: '[.summary.planSummaries[] | select(.recentBackups.status[0]? == "STATUS_ERROR")] | length' }
-    - { label: Successes, value: '[.summary.planSummaries[] | (.backupsSuccessLast30days // 0 | tonumber)] | add // 0' }
-    - { label: Failures, value: '[.summary.planSummaries[] | (.backupsFailed30days // 0 | tonumber)] | add // 0' }
-    - { label: Bytes Added, value: '[.summary.planSummaries[] | (.bytesAddedLast30days // 0 | tonumber)] | add // 0', format: bytes }
+    - { label: Plans, key: num_plans, value: '.summary.planSummaries | length' }
+    - { label: Succeeding, key: num_success_latest, value: '[.summary.planSummaries[] | select(.recentBackups.status[0]? == "STATUS_SUCCESS")] | length' }
+    - { label: Failing, key: num_failure_latest, value: '[.summary.planSummaries[] | select(.recentBackups.status[0]? == "STATUS_ERROR")] | length' }
+    - { label: Successes, key: num_success_30, value: '[.summary.planSummaries[] | (.backupsSuccessLast30days // 0 | tonumber)] | add // 0' }
+    - { label: Failures, key: num_failure_30, value: '[.summary.planSummaries[] | (.backupsFailed30days // 0 | tonumber)] | add // 0' }
+    - { label: Bytes Added, key: bytes_added_30, format: bytes, value: '[.summary.planSummaries[] | (.bytesAddedLast30days // 0 | tonumber)] | add // 0' }
 
+# Like gethomepage, only Jobs, Errors, Last Run and Next Run are shown unless listed in `fields`.
 duplicati:
   needs: [password]
   login:
@@ -389,15 +521,22 @@ duplicati:
   requests:
     backups: /api/v1/backups
     notifications: /api/v1/notifications
+    serverstate: { path: /api/v1/serverstate, optional: true }
+    progressstate: { path: /api/v1/progressstate, optional: true }   # 404 until a job has run
   fields:
-    - { label: Jobs, value: '.backups | length' }
-    - { label: Errors, value: '[.notifications[] | select((.BackupID // "") != "" and .Type == "Error")] | length' }
+    - { label: Jobs, key: jobs, value: '.backups | length' }
+    - { label: Stored, key: stored, hidden: true, format: bytes, value: '[.backups[] | .Backup.Metadata.TargetFilesSize? // 0 | tonumber? // 0] | add // 0' }
     - label: Last Run
+      key: lastBackup
       format: ago
       value: '[.backups[] | .Backup.Metadata.LastBackupFinished? | select(. != null and . != "") | "\(.[0:4])-\(.[4:6])-\(.[6:8])T\(.[9:11]):\(.[11:13]):\(.[13:15])Z" | fromdateiso8601] | max'
     - label: Next Run
+      key: nextRun
       format: duration
       value: '[.backups[] | .Schedule.Time? | select(. != null and . != "") | .[:19] + "Z" | fromdateiso8601] | min | . - now | if . < 0 then 0 else . end'
+    - { label: Running, key: running, hidden: true, value: 'if .serverstate.ActiveTask and .progressstate.BackupID then 1 else 0 end' }
+    - { label: Warnings, key: warnings, hidden: true, value: '[.notifications[] | select(.BackupID and .Type == "Warning")] | length' }
+    - { label: Errors, key: errors, value: '[.notifications[] | select(.BackupID and .Type == "Error")] | length' }
 
 watchtower:
   needs: [key]
@@ -405,33 +544,36 @@ watchtower:
   requests:
     metrics: /v1/metrics
   fields:
-    - { label: Scanned, value: '[.metrics | split("\n")[] | select(startswith("watchtower_containers_scanned ")) | split(" ")[1] | tonumber] | first' }
-    - { label: Updated, value: '[.metrics | split("\n")[] | select(startswith("watchtower_containers_updated ")) | split(" ")[1] | tonumber] | first' }
-    - { label: Failed, value: '[.metrics | split("\n")[] | select(startswith("watchtower_containers_failed ")) | split(" ")[1] | tonumber] | first' }
+    - { label: Scanned, key: containers_scanned, value: 'first(.metrics | split("\n")[] | select(startswith("watchtower_containers_scanned ")) | split(" ")[1] | tonumber)' }
+    - { label: Updated, key: containers_updated, value: 'first(.metrics | split("\n")[] | select(startswith("watchtower_containers_updated ")) | split(" ")[1] | tonumber)' }
+    - { label: Failed, key: containers_failed, value: 'first(.metrics | split("\n")[] | select(startswith("watchtower_containers_failed ")) | split(" ")[1] | tonumber)' }
 
+# API key (Bearer) or username + password.
 whatsupdocker:
-  # Authenticate with an API key (Bearer) or with username + password.
   headers: { Authorization: ["Bearer {key}", "Basic {basic}"] }
   requests:
     containers: /api/containers
   fields:
-    - { label: Monitoring, value: '.containers | length' }
-    - { label: Updates, value: '[.containers[] | select(.updateAvailable)] | length' }
+    - { label: Monitoring, key: monitoring, value: '.containers | length' }
+    - { label: Updates, key: updates, value: '[.containers[] | select(.updateAvailable)] | length' }
 
+# key: UPS device name in PeaNUT.
 peanut:
-  needs: [key]   # UPS device name in PeaNUT
+  needs: [key]
   headers: { Authorization: "Basic {basic}" }
   requests:
     ups: "/api/v1/devices/{key}"
   fields:
-    - { label: Battery Charge, value: '.ups["battery.charge"] // .ups.battery_charge', format: percent }
-    - { label: UPS Load, value: '.ups["ups.load"] // .ups.ups_load', format: percent }
+    - { label: Battery Charge, key: battery_charge, format: percent, value: 'if .ups | has("battery.charge") then .ups["battery.charge"] else .ups.battery_charge end' }
+    - { label: UPS Load, key: ups_load, format: percent, value: 'if .ups | has("ups.load") then .ups["ups.load"] else .ups.ups_load end' }
     - label: UPS Status
+      key: ups_status
       format: text
-      value: '(.ups["ups.status"] // .ups.ups_status) as $s | if $s == "OL" then "Online" elif $s == "OB" then "On Battery" elif $s == "LB" then "Low Battery" else $s end'
+      value: '(if .ups | has("ups.status") then .ups["ups.status"] else .ups.ups_status end) as $s | if $s == "OL" then "Online" elif $s == "OB" then "On Battery" elif $s == "LB" then "Low Battery" elif ($s | type) == "string" and $s != "" then $s else null end'
 
+# API token (Bearer) or username + password. Like gethomepage, Not classified and Information
+# are hidden unless listed in `fields`.
 zabbix:
-  # API token (Bearer) or username + password.
   headers: { Authorization: ["Bearer {key}", "Basic {basic}"] }
   requests:
     triggers:
@@ -446,32 +588,38 @@ zabbix:
           filter: { value: 1 }
           sortfield: priority
           sortorder: DESC
-          monitored: true
+          monitored: "true"
   fields:
-    - { label: Not classified, value: '[.triggers.result[] | select(.priority == "0")] | length' }
-    - { label: Information, value: '[.triggers.result[] | select(.priority == "1")] | length' }
-    - { label: Warning, value: '[.triggers.result[] | select(.priority == "2")] | length' }
-    - { label: Average, value: '[.triggers.result[] | select(.priority == "3")] | length' }
-    - { label: High, value: '[.triggers.result[] | select(.priority == "4")] | length' }
-    - { label: Disaster, value: '[.triggers.result[] | select(.priority == "5")] | length' }
+    - { label: Not classified, key: unclassified, hidden: true, value: '[.triggers.result[] | select(.priority == "0")] | length' }
+    - { label: Information, key: information, hidden: true, value: '[.triggers.result[] | select(.priority == "1")] | length' }
+    - { label: Warning, key: warning, value: '[.triggers.result[] | select(.priority == "2")] | length' }
+    - { label: Average, key: average, value: '[.triggers.result[] | select(.priority == "3")] | length' }
+    - { label: High, key: high, value: '[.triggers.result[] | select(.priority == "4")] | length' }
+    - { label: Disaster, key: disaster, value: '[.triggers.result[] | select(.priority == "5")] | length' }
 
+# site = monitoring site name; username / password of an automation user.
 checkmk:
-  needs: [site, username, password]   # site = monitoring site name; automation user
+  needs: [site, username, password]
   headers: { Accept: application/json, Authorization: "Bearer {username} {password}" }
   requests:
-    services: "/{site}/check_mk/api/1.0/domain-types/service/collections/all?columns=state&query=%7B%22op%22%3A%22!%3D%22%2C%22left%22%3A%22state%22%2C%22right%22%3A%220%22%7D"
-    hosts: "/{site}/check_mk/api/1.0/domain-types/host/collections/all?columns=state&query=%7B%22op%22%3A%22!%3D%22%2C%22left%22%3A%22state%22%2C%22right%22%3A%220%22%7D"
+    services: { path: "/{site}/check_mk/api/1.0/domain-types/service/collections/all", query: { columns: state, query: '{"op": "!=", "left": "state", "right": "0"}' } }
+    hosts: { path: "/{site}/check_mk/api/1.0/domain-types/host/collections/all", query: { columns: state, query: '{"op": "!=", "left": "state", "right": "0"}' } }
   fields:
-    - { label: Service issues, value: '.services.value | length' }
-    - { label: Host issues, value: '.hosts.value | length' }
+    - { label: Service issues, key: serviceErrors, value: '.services.value | length' }
+    - { label: Host issues, key: hostErrors, value: '.hosts.value | length' }
 
+# Like gethomepage, only Apps, Synced, Out Of Sync and Healthy are shown unless listed in `fields`.
 argocd:
   needs: [key]
   headers: { Authorization: "Bearer {key}" }
   requests:
     applications: /api/v1/applications
   fields:
-    - { label: Apps, value: '.applications.items | length' }
-    - { label: Synced, value: '[.applications.items[] | select((.status.sync.status // "" | ascii_downcase) == "synced")] | length' }
-    - { label: Out Of Sync, value: '[.applications.items[] | select((.status.sync.status // "" | ascii_downcase) == "outofsync")] | length' }
-    - { label: Healthy, value: '[.applications.items[] | select((.status.health.status // "" | ascii_downcase) == "healthy")] | length' }
+    - { label: Apps, key: apps, value: '.applications.items | length' }
+    - { label: Synced, key: synced, value: '[.applications.items[] | select([.status.sync.status, .status.health.status] | any(.[]; (. // "" | ascii_downcase) == "synced"))] | length' }
+    - { label: Out Of Sync, key: outOfSync, value: '[.applications.items[] | select([.status.sync.status, .status.health.status] | any(.[]; (. // "" | ascii_downcase) == "outofsync"))] | length' }
+    - { label: Healthy, key: healthy, value: '[.applications.items[] | select([.status.sync.status, .status.health.status] | any(.[]; (. // "" | ascii_downcase) == "healthy"))] | length' }
+    - { label: Degraded, key: degraded, hidden: true, value: '[.applications.items[] | select([.status.sync.status, .status.health.status] | any(.[]; (. // "" | ascii_downcase) == "degraded"))] | length' }
+    - { label: Progressing, key: progressing, hidden: true, value: '[.applications.items[] | select([.status.sync.status, .status.health.status] | any(.[]; (. // "" | ascii_downcase) == "progressing"))] | length' }
+    - { label: Missing, key: missing, hidden: true, value: '[.applications.items[] | select([.status.sync.status, .status.health.status] | any(.[]; (. // "" | ascii_downcase) == "missing"))] | length' }
+    - { label: Suspended, key: suspended, hidden: true, value: '[.applications.items[] | select([.status.sync.status, .status.health.status] | any(.[]; (. // "" | ascii_downcase) == "suspended"))] | length' }

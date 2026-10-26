@@ -74,6 +74,10 @@ h1 { margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -.01em; }
   border: 1px solid var(--down); background: color-mix(in srgb, var(--down) 10%, var(--card));
 }
 .error pre { margin: 8px 0 0; overflow-x: auto; font: 12.5px/1.5 ui-monospace, monospace; }
+.error.warning { border-color: #e2a03f; background: color-mix(in srgb, #e2a03f 10%, var(--card)); }
+.error.warning summary { cursor: pointer; }
+.error ul { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 4px; }
+.error li code { font-size: 12.5px; overflow-wrap: anywhere; }
 .empty { color: var(--muted); text-align: center; padding: 48px 0; }
 code { font: 13px ui-monospace, monospace; }
 

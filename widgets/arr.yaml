@@ -10,9 +10,9 @@ sonarr:
     queue: /api/v3/queue
     series: /api/v3/series
   fields:
-    - { label: Wanted, value: .wanted.totalRecords }
-    - { label: Queued, value: .queue.totalRecords }
-    - { label: Series, value: .series | length }
+    - { label: Wanted, key: wanted, value: .wanted.totalRecords }
+    - { label: Queued, key: queued, value: .queue.totalRecords }
+    - { label: Series, key: series, value: .series | length }
 
 radarr:
   needs: [key]
@@ -21,10 +21,10 @@ radarr:
     movies: /api/v3/movie
     queue: /api/v3/queue/status
   fields:
-    - { label: Wanted, value: "[.movies[] | select(.monitored and (.hasFile | not) and .isAvailable)] | length" }
-    - { label: Missing, value: "[.movies[] | select(.monitored and (.hasFile | not))] | length" }
-    - { label: Queued, value: .queue.totalCount }
-    - { label: Movies, value: "[.movies[] | select(.hasFile)] | length" }
+    - { label: Wanted, key: wanted, value: "[.movies[] | select(.monitored and (.hasFile | not) and .isAvailable)] | length" }
+    - { label: Missing, key: missing, value: "[.movies[] | select(.monitored and (.hasFile | not))] | length" }
+    - { label: Queued, key: queued, value: .queue.totalCount }
+    - { label: Movies, key: movies, value: "[.movies[] | select(.hasFile)] | length" }
 
 lidarr:
   needs: [key]
@@ -34,9 +34,9 @@ lidarr:
     queue: /api/v1/queue/status
     artists: /api/v1/artist
   fields:
-    - { label: Wanted, value: .wanted.totalRecords }
-    - { label: Queued, value: .queue.totalCount }
-    - { label: Artists, value: .artists | length }
+    - { label: Wanted, key: wanted, value: .wanted.totalRecords }
+    - { label: Queued, key: queued, value: .queue.totalCount }
+    - { label: Artists, key: artists, value: .artists | length }
 
 readarr:
   needs: [key]
@@ -46,9 +46,9 @@ readarr:
     queue: /api/v1/queue/status
     books: /api/v1/book
   fields:
-    - { label: Wanted, value: .wanted.totalRecords }
-    - { label: Queued, value: .queue.totalCount }
-    - { label: Books, value: "[.books[] | select((.statistics.bookFileCount // 0) > 0)] | length" }
+    - { label: Wanted, key: wanted, value: .wanted.totalRecords }
+    - { label: Queued, key: queued, value: .queue.totalCount }
+    - { label: Books, key: books, value: "[.books[] | select((.statistics.bookFileCount // 0) > 0)] | length" }
 
 prowlarr:
   needs: [key]
@@ -56,10 +56,10 @@ prowlarr:
   requests:
     stats: /api/v1/indexerstats
   fields:
-    - { label: Grabs, value: "[(.stats.indexers // [])[].numberOfGrabs // 0] | add // 0" }
-    - { label: Queries, value: "[(.stats.indexers // [])[].numberOfQueries // 0] | add // 0" }
-    - { label: Fail Grabs, value: "[(.stats.indexers // [])[].numberOfFailedGrabs // 0] | add // 0" }
-    - { label: Fail Queries, value: "[(.stats.indexers // [])[].numberOfFailedQueries // 0] | add // 0" }
+    - { label: Grabs, key: numberOfGrabs, value: "[(.stats.indexers // [])[].numberOfGrabs // 0] | add // 0" }
+    - { label: Queries, key: numberOfQueries, value: "[(.stats.indexers // [])[].numberOfQueries // 0] | add // 0" }
+    - { label: Fail Grabs, key: numberOfFailGrabs, value: "[(.stats.indexers // [])[].numberOfFailedGrabs // 0] | add // 0" }
+    - { label: Fail Queries, key: numberOfFailQueries, value: "[(.stats.indexers // [])[].numberOfFailedQueries // 0] | add // 0" }
 
 bazarr:
   needs: [key]
@@ -67,19 +67,18 @@ bazarr:
     episodes: { path: /api/episodes/wanted, query: { apikey: "{key}" } }
     movies: { path: /api/movies/wanted, query: { apikey: "{key}" } }
   fields:
-    - { label: Missing Episodes, value: .episodes.total }
-    - { label: Missing Movies, value: .movies.total }
+    - { label: Missing Episodes, key: missingEpisodes, value: .episodes.total }
+    - { label: Missing Movies, key: missingMovies, value: .movies.total }
 
-# The key must stay in the query string. With an admin password set, a session cookie is used.
+# Set password when Jackett has an admin password (session cookie); key is optional.
 jackett:
-  needs: [key]
   login: { path: /UI/Dashboard, method: POST, form: { password: "{password}" }, cookie: Jackett }
   headers: { Cookie: "{token}" }
   requests:
     indexers: { path: /api/v2.0/indexers, query: { apikey: "{key}", configured: "true" } }
   fields:
-    - { label: Configured, value: .indexers | length }
-    - { label: Errored, value: "[.indexers[] | select(.last_error)] | length" }
+    - { label: Configured, key: configured, value: .indexers | length }
+    - { label: Errored, key: errored, value: "[.indexers[] | select(.last_error)] | length" }
 
 # Mylar only accepts the key in the query string.
 mylar:
@@ -89,9 +88,9 @@ mylar:
     issues: { path: /api, query: { cmd: getIndex, apikey: "{key}" } }
     wanted: { path: /api, query: { cmd: getWanted, apikey: "{key}" } }
   fields:
-    - { label: Series, value: ".series.data | length" }
-    - { label: Issues, value: "[.issues.data[].totalIssues // 0] | add // 0" }
-    - { label: Wanted, value: ".wanted.issues | length" }
+    - { label: Series, key: series, value: ".series.data | length" }
+    - { label: Issues, key: issues, value: "[.issues.data[].totalIssues // 0] | add // 0" }
+    - { label: Wanted, key: wanted, value: ".wanted.issues | length" }
 
 # Medusa puts the key in the path.
 medusa:
@@ -100,9 +99,9 @@ medusa:
     stats: /api/v1/{key}/?cmd=shows.stats
     future: /api/v1/{key}/?cmd=future
   fields:
-    - { label: Wanted, value: "[.future.data | (.later, .missed, .soon, .today) | length] | add" }
-    - { label: Queued, value: .stats.data.ep_snatched }
-    - { label: Series, value: .stats.data.shows_active }
+    - { label: Wanted, key: wanted, value: "[.future.data | (.later, .missed, .soon, .today) | length] | add" }
+    - { label: Queued, key: queued, value: .stats.data.ep_snatched }
+    - { label: Series, key: series, value: .stats.data.shows_active }
 
 seerr:
   needs: [key]
@@ -111,12 +110,12 @@ seerr:
     requests: /api/v1/request/count
     issues: /api/v1/issue/count
   fields:
-    - { label: Pending, value: .requests.pending }
-    - { label: Approved, value: .requests.approved }
-    - { label: Available, value: .requests.available }
-    - { label: Completed, value: ".requests.completed // .requests.available" }
-    - { label: Processing, value: .requests.processing }
-    - { label: Open Issues, value: '"\(.issues.open) / \(.issues.total)"', format: text }
+    - { label: Pending, key: pending, value: .requests.pending }
+    - { label: Approved, key: approved, value: .requests.approved }
+    - { label: Available, key: available, value: .requests.available, hidden: true }
+    - { label: Completed, key: completed, value: .requests.completed }
+    - { label: Processing, key: processing, value: .requests.processing, hidden: true }
+    - { label: Open Issues, key: issues, value: '"\(.issues.open) / \(.issues.total)"', format: text, hidden: true }
 
 overseerr:
   needs: [key]
@@ -124,11 +123,12 @@ overseerr:
   requests:
     requests: /api/v1/request/count
   fields:
-    - { label: Pending, value: .requests.pending }
-    - { label: Processing, value: .requests.processing }
-    - { label: Approved, value: .requests.approved }
-    - { label: Available, value: .requests.available }
+    - { label: Pending, key: pending, value: .requests.pending }
+    - { label: Processing, key: processing, value: .requests.processing }
+    - { label: Approved, key: approved, value: .requests.approved }
+    - { label: Available, key: available, value: .requests.available }
 
+# Jellyseerr is now Seerr: same API, same fields as seerr.
 jellyseerr:
   needs: [key]
   headers: { X-Api-Key: "{key}" }
@@ -136,12 +136,12 @@ jellyseerr:
     requests: /api/v1/request/count
     issues: /api/v1/issue/count
   fields:
-    - { label: Pending, value: .requests.pending }
-    - { label: Approved, value: .requests.approved }
-    - { label: Available, value: .requests.available }
-    - { label: Completed, value: ".requests.completed // .requests.available" }
-    - { label: Processing, value: .requests.processing }
-    - { label: Open Issues, value: '"\(.issues.open) / \(.issues.total)"', format: text }
+    - { label: Pending, key: pending, value: .requests.pending }
+    - { label: Approved, key: approved, value: .requests.approved }
+    - { label: Available, key: available, value: .requests.available, hidden: true }
+    - { label: Completed, key: completed, value: .requests.completed }
+    - { label: Processing, key: processing, value: .requests.processing, hidden: true }
+    - { label: Open Issues, key: issues, value: '"\(.issues.open) / \(.issues.total)"', format: text, hidden: true }
 
 ombi:
   needs: [key]
@@ -149,9 +149,9 @@ ombi:
   requests:
     requests: /api/v1/Request/count
   fields:
-    - { label: Pending, value: .requests.pending }
-    - { label: Approved, value: .requests.approved }
-    - { label: Available, value: .requests.available }
+    - { label: Pending, key: pending, value: .requests.pending }
+    - { label: Approved, key: approved, value: .requests.approved }
+    - { label: Available, key: available, value: .requests.available }
 
 autobrr:
   needs: [key]
@@ -161,33 +161,33 @@ autobrr:
     filters: /api/filters
     indexers: /api/release/indexers
   fields:
-    - { label: Approved, value: .stats.push_approved_count }
-    - { label: Rejected, value: .stats.push_rejected_count }
-    - { label: Filters, value: ".filters | length" }
-    - { label: Indexers, value: ".indexers | length" }
+    - { label: Approved, key: approvedPushes, value: .stats.push_approved_count }
+    - { label: Rejected, key: rejectedPushes, value: .stats.push_rejected_count }
+    - { label: Filters, key: filters, value: ".filters | length" }
+    - { label: Indexers, key: indexers, value: ".indexers | length" }
 
 # Maintainerr has no authentication.
 maintainerr:
   requests:
     metrics: /api/storage-metrics
   fields:
-    - { label: Items Handled, value: ".metrics.cleanupTotals.itemsHandled // 0" }
-    - { label: Episodes Handled, value: ".metrics.cleanupTotals.episodesHandled // 0" }
-    - { label: Movies Handled, value: ".metrics.cleanupTotals.moviesHandled // 0" }
-    - { label: Shows Handled, value: ".metrics.cleanupTotals.showsHandled // 0" }
-    - { label: Seasons Handled, value: ".metrics.cleanupTotals.seasonsHandled // 0" }
-    - { label: Reclaimable, value: ".metrics.collectionSummary.activeSizeBytes // 0", format: bytes }
-    - { label: Movie Reclaimable, value: ".metrics.collectionSummary.movieSizeBytes // 0", format: bytes }
-    - { label: Show Reclaimable, value: ".metrics.collectionSummary.showSizeBytes // 0", format: bytes }
-    - { label: Total Capacity, value: ".metrics.totals.totalSpace // 0", format: bytes }
+    - { label: Items Handled, key: itemsHandled, value: ".metrics.cleanupTotals.itemsHandled // 0" }
+    - { label: Episodes Handled, key: episodesHandled, value: ".metrics.cleanupTotals.episodesHandled // 0" }
+    - { label: Movies Handled, key: moviesHandled, value: ".metrics.cleanupTotals.moviesHandled // 0" }
+    - { label: Shows Handled, key: showsHandled, value: ".metrics.cleanupTotals.showsHandled // 0", hidden: true }
+    - { label: Seasons Handled, key: seasonsHandled, value: ".metrics.cleanupTotals.seasonsHandled // 0", hidden: true }
+    - { label: Reclaimable, key: reclaimable, value: ".metrics.collectionSummary.activeSizeBytes // 0", format: bytes }
+    - { label: Movie Reclaimable, key: movieReclaimable, value: ".metrics.collectionSummary.movieSizeBytes // 0", format: bytes, hidden: true }
+    - { label: Show Reclaimable, key: showReclaimable, value: ".metrics.collectionSummary.showSizeBytes // 0", format: bytes, hidden: true }
+    - { label: Total Capacity, key: totalCapacity, value: ".metrics.totals.totalSpace // 0", format: bytes, hidden: true }
 
 sportarr:
   needs: [key]
   requests:
-    wanted: { path: /api/wanted/missing, query: { apikey: "{key}" } }
+    wanted: { path: /api/wanted/missing, query: { apikey: "{key}", page: "1", pageSize: "1" } }
     queue: { path: /api/queue, query: { apikey: "{key}" } }
     leagues: { path: /api/leagues, query: { apikey: "{key}" } }
   fields:
-    - { label: Wanted, value: .wanted.totalRecords }
-    - { label: Queued, value: ".queue | length" }
-    - { label: Leagues, value: ".leagues | length" }
+    - { label: Wanted, key: wanted, value: .wanted.totalRecords }
+    - { label: Queued, key: queued, value: ".queue | length" }
+    - { label: Leagues, key: leagues, value: ".leagues | length" }

@@ -5,7 +5,8 @@
 #
 # Reads services.yaml, bookmarks.yaml, settings.yaml, widgets.yaml, docker.yaml and
 # kubernetes.yaml (all optional). The config goes to stdout, warnings about what has no
-# equivalent go to stderr. Then run `homepage check`: it names any widget option left over.
+# equivalent go to stderr. Then run `homepage check`: it lists anything left to fix. (Homepage
+# also reads most gethomepage service keys directly; this script handles the other files.)
 #
 # Needs jq, and yq (mikefarah) or Docker (falls back to the mikefarah/yq image).
 set -euo pipefail
@@ -55,59 +56,64 @@ result=$(jq '
       elif test("^https?://") then .
       else sub("\\.(png|svg|webp)$"; "") end;
 
-  def single: to_entries[0];
+  # Every input is checked for shape: anything unexpected is skipped, never a crash.
+  def single: if type == "object" then to_entries[0] else empty end;
+  def items: if type == "array" then .[] else empty end;
+  def obj: if type == "object" then . else {} end;
 
   . as $in
   | {config: {}, warnings: []}
 
   # settings.yaml
-  | if $in.settings then
-      .config.title = $in.settings.title
-      | if ($in.settings.theme | IN("dark", "light")) then .config.theme = $in.settings.theme else . end
-      | ([$in.settings | keys[] | select(IN("title", "theme") | not)]) as $skip
+  | ($in.settings | obj) as $settings
+  | if $settings != {} then
+      .config.title = ($settings.title | if type == "string" then . else null end)
+      | if ($settings.theme | IN("dark", "light")) then .config.theme = $settings.theme else . end
+      | ([$settings | keys[] | select(IN("title", "theme") | not)]) as $skip
       | if ($skip | length) > 0 then warn("settings.yaml: ignored \($skip | join(", "))") else . end
     else . end
 
   # widgets.yaml: datetime, search and resources have an equivalent
-  | if $in.widgets then
-      reduce ($in.widgets[] | single) as $w (.config.widgets = [];
+  | if ($in.widgets | type) == "array" then
+      reduce ($in.widgets | items | single) as $w (.config.widgets = [];
         if $w.key == "datetime" then .config.widgets += ["clock"]
         elif $w.key == "resources" then .config.widgets += ["resources"]
         elif $w.key == "search" then
           .config.widgets += ["search"]
-          | ($w.value.provider | if type == "array" then .[0] else . end) as $p
+          | ($w.value | obj) as $o
+          | ($o.provider | if type == "array" then .[0] else . end) as $p
           | if ($p | IN("duckduckgo", "google", "bing")) then .config.search = $p
-            elif $w.value.url then .config.search = "\($w.value.url){q}"
+            elif ($o.url | type) == "string" then .config.search = "\($o.url){q}"
             else warn("widgets.yaml: search provider \($p) has no equivalent, using duckduckgo") end
         else warn("widgets.yaml: no \($w.key) widget") end)
     else . end
 
   # docker.yaml
-  | if $in.docker then
-      reduce ($in.docker | to_entries[]) as $d (.;
+  | if ($in.docker | type) == "object" then
+      reduce ($in.docker | to_entries[] | .value |= obj) as $d (.;
         if $d.value.socket then .config.docker[$d.key] = "unix://\($d.value.socket)"
         elif $d.value.host then
           .config.docker[$d.key] = "tcp://\($d.value.host):\($d.value.port // 2375)"
           | if $d.value.tls then warn("docker.yaml: \($d.key): TLS client certificates are not supported") else . end
         else warn("docker.yaml: \($d.key): no host or socket") end)
     else . end
-  | ($in.docker // {} | keys) as $hosts
+  | ($in.docker | obj | keys) as $hosts
 
   # kubernetes.yaml
-  | if ($in.kubernetes.mode // "disabled") != "disabled" then .config.kubernetes = true else . end
+  | if (($in.kubernetes | obj).mode // "disabled") != "disabled" then .config.kubernetes = true else . end
 
   # services.yaml: [{Group: [{Service: {...}} | {SubGroup: [...]}]}]
-  | reduce ($in.services // [] | .[] | single) as $g (.;
-      reduce ($g.value // [] | .[] | single) as $s (.;
+  | reduce ($in.services | items | single) as $g (.;
+      reduce ($g.value | items | single) as $s (.;
         if ($s.value | type) == "array" then
           warn("services.yaml: nested group \($g.key) / \($s.key) is not supported, skipped")
         else
-          ($s.value // {}) as $v
+          ($s.value | obj) as $v
           | "services.yaml: \($g.key) / \($s.key)" as $at
           | ({name: $s.key}
              + (if $v.href then {url: $v.href} else {} end)
              + (if $v.description then {description: $v.description} else {} end)
-             + (if $v.icon then {icon: ($v.icon | icon)} else {} end)) as $svc
+             + (if ($v.icon | type) == "string" then {icon: ($v.icon | icon)} else {} end)) as $svc
           # status: siteMonitor, else the container
           | (if $v.siteMonitor then {check: $v.siteMonitor}
              elif $v.container and ($hosts | index($v.server // "")) then {check: "docker://\($v.server)/\($v.container)"}
@@ -116,14 +122,14 @@ result=$(jq '
           | if $v.container and ($check.check // "" | startswith("docker://") | not) and ($v.siteMonitor | not)
             then warn("\($at): docker server \($v.server // "?") is not in docker.yaml, no check") else . end
           # widget: scalars become strings, fields use other names here
-          | ($v.widget // ($v.widgets // [])[0]) as $w
-          | if ($v.widgets | length) > 1 then warn("\($at): only the first widget is kept") else . end
-          | (if $w then
-              {widget: ($w | with_entries(select(.key != "fields" and (.value | type | IN("string", "number", "boolean")))
-                                          | .value |= tostring))}
+          | (($v.widget // ([$v.widgets | items][0])) | obj) as $w
+          | if ([$v.widgets | items] | length) > 1 then warn("\($at): only the first widget is kept") else . end
+          | (if $w.type then
+              {widget: (($w | with_entries(select(.key != "fields" and (.value | type | IN("string", "number", "boolean")))
+                                           | .value |= tostring))
+                        + (if ($w.fields | type) == "array" then {fields: [$w.fields[] | tostring]} else {} end))}
              else {} end) as $widget
-          | if $w.fields then warn("\($at): widget fields dropped (names differ here, see docs/widget-types.md)") else . end
-          | ([$w // {} | to_entries[] | select(.value | type | IN("array", "object")) | .key | select(. != "fields")]) as $complex
+          | ([$w | to_entries[] | select(.value | type | IN("array", "object")) | .key | select(. != "fields")]) as $complex
           | if ($complex | length) > 0 then warn("\($at): widget options dropped: \($complex | join(", "))") else . end
           | ([$v | keys[] | select(IN("href", "description", "icon", "siteMonitor", "ping", "server", "container", "widget", "widgets") | not)]) as $skip
           | if ($skip | length) > 0 then warn("\($at): ignored \($skip | join(", "))") else . end
@@ -133,16 +139,17 @@ result=$(jq '
   | del(.groups)
 
   # bookmarks.yaml: [{Group: [{Link: [{href, icon, abbr}]}]}]
-  | .config.bookmarks = [$in.bookmarks // [] | .[] | single
-      | {name: .key, links: [.value // [] | .[] | single
-          | {name: .key, url: .value[0].href}
-            + (if .value[0].icon then {icon: (.value[0].icon | icon)} else {} end)]}]
+  | .config.bookmarks = [$in.bookmarks | items | single
+      | {name: .key, links: [.value | items | single
+          | (.value | if type == "array" then .[0] else . end | obj) as $l
+          | {name: .key, url: $l.href}
+            + (if ($l.icon | type) == "string" then {icon: ($l.icon | icon)} else {} end)]}]
 
   | if [.config.bookmarks[].links[] | select(.url == null)] | length > 0
     then warn("bookmarks.yaml: links without href dropped")
          | .config.bookmarks[].links |= map(select(.url != null)) else . end
   | .config |= (with_entries(select(.value != null and .value != [] and .value != {})) | walk(if type == "string" then secrets else . end))
-' <<< "$input")
+' <<< "$input") || { echo "conversion failed: please open an issue with the jq error above" >&2; exit 1; }
 
 jq -r '.warnings[] | "warning: " + .' <<< "$result" >&2
 if grep -q 'CHANGE_ME_' <<< "$result"; then

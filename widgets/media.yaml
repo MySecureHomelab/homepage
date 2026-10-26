@@ -2,32 +2,35 @@
 # Each entry: needs (required options), headers, optional login, named requests,
 # and fields computed with jq over {"<request name>": <response>}. See src/widgets.rs.
 
+# Count fields are hidden unless listed in `fields` (gethomepage: enableBlocks).
+# Works with Jellyfin < and >= 10.12 whatever `version` is (the un-prefixed endpoints exist in both).
 jellyfin:
   needs: [key]
-  headers: { Authorization: 'MediaBrowser Token="{key}", Client="Homepage", Device="Homepage", DeviceId="homepage", Version="1.0.0"' }
+  defaults: { version: "1", deviceId: homepage }
+  headers: { Authorization: 'MediaBrowser Token="{key}", Client="Homepage", Device="Homepage", DeviceId="{deviceId}", Version="1.0.0"' }
   requests:
     sessions: /Sessions
     counts: /Items/Counts
   fields:
-    - { label: Playing, value: "[.sessions[] | select(.NowPlayingItem)] | length" }
-    - { label: Movies, value: .counts.MovieCount }
-    - { label: Series, value: .counts.SeriesCount }
-    - { label: Episodes, value: .counts.EpisodeCount }
-    - { label: Songs, value: .counts.SongCount }
-    - { label: Albums, value: .counts.AlbumCount }
+    - { label: Movies, key: movies, hidden: true, value: .counts.MovieCount }
+    - { label: Series, key: series, hidden: true, value: .counts.SeriesCount }
+    - { label: Episodes, key: episodes, hidden: true, value: .counts.EpisodeCount }
+    - { label: Songs, key: songs, hidden: true, value: .counts.SongCount }
+    - { label: Albums, key: albums, hidden: true, value: .counts.AlbumCount }
+    - { label: Playing, key: playing, value: "[.sessions[] | select(.NowPlayingItem)] | length" }
 
+# Count fields are hidden unless listed in `fields` (gethomepage: enableBlocks).
 emby:
   needs: [key]
-  headers: { X-Emby-Token: "{key}" }
   requests:
-    sessions: /emby/Sessions
-    counts: /emby/Items/Counts
+    sessions: { path: /emby/Sessions, query: { api_key: "{key}" } }
+    counts: { path: /emby/Items/Counts, query: { api_key: "{key}" } }
   fields:
-    - { label: Playing, value: "[.sessions[] | select(.NowPlayingItem)] | length" }
-    - { label: Movies, value: .counts.MovieCount }
-    - { label: Series, value: .counts.SeriesCount }
-    - { label: Episodes, value: .counts.EpisodeCount }
-    - { label: Songs, value: .counts.SongCount }
+    - { label: Movies, key: movies, hidden: true, value: .counts.MovieCount }
+    - { label: Series, key: series, hidden: true, value: .counts.SeriesCount }
+    - { label: Episodes, key: episodes, hidden: true, value: .counts.EpisodeCount }
+    - { label: Songs, key: songs, hidden: true, value: .counts.SongCount }
+    - { label: Playing, key: playing, value: "[.sessions[] | select(.NowPlayingItem)] | length" }
 
 plex:
   needs: [key]
@@ -48,10 +51,10 @@ plex:
       query: { X-Plex-Container-Size: "0" }
       each: '[.sections.MediaContainer.Directory[]? | select(.type == "artist") | .key]'
   fields:
-    - { label: Active Streams, value: ".sessions.MediaContainer.size // 0" }
-    - { label: Albums, value: "[.albums[].MediaContainer | (.totalSize // .size // 0)] | add // 0" }
-    - { label: Movies, value: "[.movies[].MediaContainer | (.totalSize // .size // 0)] | add // 0" }
-    - { label: TV Shows, value: "[.shows[].MediaContainer | (.totalSize // .size // 0)] | add // 0" }
+    - { label: Active Streams, key: streams, value: ".sessions.MediaContainer.size // 0" }
+    - { label: Albums, key: albums, value: "[.albums[].MediaContainer | (.totalSize // .size // 0)] | add // 0" }
+    - { label: Movies, key: movies, value: "[.movies[].MediaContainer | (.totalSize // .size // 0)] | add // 0" }
+    - { label: TV Shows, key: tv, value: "[.shows[].MediaContainer | (.totalSize // .size // 0)] | add // 0" }
 
 # Tautulli takes its key in the query string.
 tautulli:
@@ -59,9 +62,9 @@ tautulli:
   requests:
     activity: { path: /api/v2, query: { apikey: "{key}", cmd: get_activity } }
   fields:
-    - { label: Playing, value: ".activity.response.data.stream_count | tonumber? // 0" }
-    - { label: Transcoding, value: ".activity.response.data.stream_count_transcode | tonumber? // 0" }
-    - { label: Bitrate, value: "(.activity.response.data.total_bandwidth | tonumber? // 0) * 1000", format: bitrate }
+    - { label: Playing, key: playing, value: ".activity.response.data.stream_count | tonumber? // 0" }
+    - { label: Transcoding, key: transcoding, value: ".activity.response.data.stream_count_transcode | tonumber? // 0" }
+    - { label: Bitrate, key: bitrate, value: "(.activity.response.data.total_bandwidth | tonumber? // 0) * 1000", format: bitrate }
 
 # Views over the last `days` days.
 jellystat:
@@ -71,16 +74,16 @@ jellystat:
   requests:
     views: { path: /stats/getViewsByLibraryType, query: { days: "{days}" } }
   fields:
-    - { label: Songs, value: .views.Audio // 0 }
-    - { label: Movies, value: .views.Movie // 0 }
-    - { label: Episodes, value: .views.Series // 0 }
-    - { label: Other, value: .views.Other // 0 }
+    - { label: Songs, key: songs, value: .views.Audio // 0 }
+    - { label: Movies, key: movies, value: .views.Movie // 0 }
+    - { label: Episodes, key: episodes, value: .views.Series // 0 }
+    - { label: Other, key: other, value: .views.Other // 0 }
 
-# Subsonic API: the password goes in the query string (token/salt auth cannot be computed here).
+# Subsonic API: `user` + `token` (md5(password + salt)) + `salt`, or `user` + `password`.
 navidrome:
-  needs: [username, password]
+  needs: [user]
   requests:
-    nowplaying: { path: /rest/getNowPlaying, query: { u: "{username}", p: "{password}", v: 1.16.1, c: homepage, f: json } }
+    nowplaying: { path: /rest/getNowPlaying, query: { u: "{user}", t: "{token}", s: "{salt}", p: "{password}", v: 1.16.1, c: homepage, f: json } }
   fields:
     - { label: Now Playing, value: '(.nowplaying["subsonic-response"].nowPlaying.entry // []) | if type == "array" then length else 1 end' }
 
@@ -96,57 +99,65 @@ audiobookshelf:
       path: /api/libraries/{item}/stats
       each: '[.libraries.libraries[]? | select(.mediaType == "podcast") | .id]'
   fields:
-    - { label: Podcasts, value: "[.podcasts[].totalItems | tonumber? // 0] | add // 0" }
-    - { label: Podcast Duration, value: "[.podcasts[].totalDuration | tonumber? // 0] | add // 0", format: duration }
-    - { label: Books, value: "[.books[].totalItems | tonumber? // 0] | add // 0" }
-    - { label: Book Duration, value: "[.books[].totalDuration | tonumber? // 0] | add // 0", format: duration }
+    - { label: Podcasts, key: podcasts, value: "[.podcasts[].totalItems | tonumber? // 0] | add // 0" }
+    - { label: Podcast Duration, key: podcastsDuration, value: "[.podcasts[].totalDuration | tonumber? // 0] | add // 0", format: duration }
+    - { label: Books, key: books, value: "[.books[].totalItems | tonumber? // 0] | add // 0" }
+    - { label: Book Duration, key: booksDuration, value: "[.books[].totalDuration | tonumber? // 0] | add // 0", format: duration }
 
-# Basic auth (username + password) or API key.
+# Basic auth (username + password) or API key. `version: 2` for Komga >= v2.
 komga:
+  defaults: { version: "1" }
+  computed:
+    v1: 'if ($options.version | tostring) == "2" then null else "" end'
+    v2: 'if ($options.version | tostring) == "2" then "" else null end'
   headers:
     Authorization: "Basic {basic}"
     X-API-Key: "{key}"
   requests:
     libraries: /api/v1/libraries
-    series: { path: "/api/v1/series/list?size=1", method: POST, json: {} }
-    books: { path: "/api/v1/books/list?size=1", method: POST, json: {} }
+    series1: { path: "/api/v1/series{v1}?size=1", optional: true }
+    books1: { path: "/api/v1/books{v1}?size=1", optional: true }
+    series2: { path: "/api/v1/series/list{v2}?size=1", method: POST, json: {}, optional: true }
+    books2: { path: "/api/v1/books/list{v2}?size=1", method: POST, json: {}, optional: true }
   fields:
-    - { label: Libraries, value: "[.libraries[] | select(.unavailable | not)] | length" }
-    - { label: Series, value: .series.totalElements }
-    - { label: Books, value: .books.totalElements }
+    - { label: Libraries, key: libraries, value: "[.libraries[] | select(.unavailable | not)] | length" }
+    - { label: Series, key: series, value: (.series2 // .series1).totalElements }
+    - { label: Books, key: books, value: (.books2 // .books1).totalElements }
 
+# key (API key), or username + password.
 kavita:
-  needs: [key]
-  login: { path: /api/Account/login, method: POST, json: { username: "", password: "", apiKey: "{key}" }, token: .token }
+  login: { path: /api/Account/login, method: POST, json: { username: "{username}", password: "{password}", apiKey: "{key}" }, token: .token }
   headers: { Authorization: "Bearer {token}" }
   requests:
     stats: /api/Stats/server/stats
   fields:
-    - { label: Series, value: .stats.seriesCount }
-    - { label: Files, value: .stats.totalFiles }
+    - { label: Series, key: seriesCount, value: .stats.seriesCount }
+    - { label: Files, key: totalFiles, value: .stats.totalFiles }
 
+# username + password (Basic auth), unless Calibre-Web allows anonymous browsing.
 calibreweb:
-  needs: [username, password]
   headers: { Authorization: "Basic {basic}" }
   requests:
     stats: /opds/stats
   fields:
-    - { label: Books, value: .stats.books }
-    - { label: Authors, value: .stats.authors }
-    - { label: Categories, value: .stats.categories }
-    - { label: Series, value: .stats.series }
+    - { label: Books, key: books, value: .stats.books }
+    - { label: Authors, key: authors, value: .stats.authors }
+    - { label: Categories, key: categories, value: .stats.categories }
+    - { label: Series, key: series, value: .stats.series }
 
-# Immich >= v1.118 (needs an API key with the server.statistics permission).
+# `version: 2` for Immich >= v1.118 (API key with the server.statistics permission).
 immich:
   needs: [key]
+  defaults: { version: "1" }
+  computed: { server: 'if ($options.version | tostring) == "2" then "server" else "server-info" end' }
   headers: { x-api-key: "{key}" }
   requests:
-    stats: /api/server/statistics
+    stats: /api/{server}/statistics
   fields:
-    - { label: Users, value: "(.stats.usageByUser // []) | length" }
-    - { label: Photos, value: .stats.photos }
-    - { label: Videos, value: .stats.videos }
-    - { label: Storage, value: .stats.usage, format: bytes }
+    - { label: Users, key: users, value: "(.stats.usageByUser // []) | length" }
+    - { label: Photos, key: photos, value: .stats.photos }
+    - { label: Videos, key: videos, value: .stats.videos }
+    - { label: Storage, key: storage, value: .stats.usage, format: bytes }
 
 # Authenticates with an app password / access token (`key`) or username + password.
 photoprism:
@@ -154,10 +165,10 @@ photoprism:
   requests:
     session: { path: /api/v1/session, method: POST, json: { authToken: "{key}", username: "{username}", password: "{password}" } }
   fields:
-    - { label: Albums, value: .session.config.count.albums }
-    - { label: Photos, value: .session.config.count.photos }
-    - { label: Videos, value: .session.config.count.videos }
-    - { label: People, value: .session.config.count.people }
+    - { label: Albums, key: albums, value: .session.config.count.albums }
+    - { label: Photos, key: photos, value: .session.config.count.photos }
+    - { label: Videos, key: videos, value: .session.config.count.videos }
+    - { label: People, key: people, value: .session.config.count.people }
 
 # `key` is optional.
 tdarr:
@@ -168,44 +179,44 @@ tdarr:
       method: POST
       json: { data: { collection: StatisticsJSONDB, mode: getById, docID: statistics } }
   fields:
-    - { label: Queue, value: "((.stats.table1ViewableCount | select(. != 0)) // .stats.table1Count // 0) + ((.stats.table4ViewableCount | select(. != 0)) // .stats.table4Count // 0)" }
-    - { label: Processed, value: "((.stats.table2ViewableCount | select(. != 0)) // .stats.table2Count // 0) + ((.stats.table5ViewableCount | select(. != 0)) // .stats.table5Count // 0)" }
-    - { label: Errored, value: "((.stats.table3ViewableCount | select(. != 0)) // .stats.table3Count // 0) + ((.stats.table6ViewableCount | select(. != 0)) // .stats.table6Count // 0)" }
-    - { label: Saved, value: "(.stats.sizeDiff | tonumber? // 0) * 1000000000", format: bytes }
+    - { label: Queue, key: queue, value: "((.stats.table1ViewableCount | select(. != 0)) // .stats.table1Count // 0) + ((.stats.table4ViewableCount | select(. != 0)) // .stats.table4Count // 0)" }
+    - { label: Processed, key: processed, value: "((.stats.table2ViewableCount | select(. != 0)) // .stats.table2Count // 0) + ((.stats.table5ViewableCount | select(. != 0)) // .stats.table5Count // 0)" }
+    - { label: Errored, key: errored, value: "((.stats.table3ViewableCount | select(. != 0)) // .stats.table3Count // 0) + ((.stats.table6ViewableCount | select(. != 0)) // .stats.table6Count // 0)" }
+    - { label: Saved, key: saved, value: "(.stats.sizeDiff | tonumber? // 0) * 1000000000", format: bytes }
 
 unmanic:
   requests:
     workers: /unmanic/api/v2/workers/status
     pending: { path: /unmanic/api/v2/pending/tasks, method: POST, json: {} }
   fields:
-    - { label: Active Workers, value: "[(.workers.workers_status // [])[] | select(.idle | not)] | length" }
-    - { label: Total Workers, value: "(.workers.workers_status // []) | length" }
-    - { label: Queue Length, value: .pending.recordsTotal }
+    - { label: Active Workers, key: active_workers, value: "[(.workers.workers_status // [])[] | select(.idle | not)] | length" }
+    - { label: Total Workers, key: total_workers, value: "(.workers.workers_status // []) | length" }
+    - { label: Queue Length, key: records_total, value: .pending.recordsTotal }
 
 # `key` is optional (only when Stash has login credentials).
 stash:
-  headers: { ApiKey: "{key}" }
   requests:
     stats:
       path: /graphql
       method: POST
+      query: { apikey: "{key}" }
       json:
         query: "{ stats { scene_count scenes_size scenes_duration image_count images_size gallery_count performer_count studio_count movie_count tag_count total_o_count total_play_duration total_play_count scenes_played } }"
   fields:
-    - { label: Scenes, value: .stats.data.stats.scene_count }
-    - { label: Scenes Played, value: .stats.data.stats.scenes_played }
-    - { label: Total Plays, value: .stats.data.stats.total_play_count }
-    - { label: Time Watched, value: .stats.data.stats.total_play_duration, format: duration }
-    - { label: Scenes Size, value: .stats.data.stats.scenes_size, format: bytes }
-    - { label: Scenes Duration, value: .stats.data.stats.scenes_duration, format: duration }
-    - { label: Images, value: .stats.data.stats.image_count }
-    - { label: Images Size, value: .stats.data.stats.images_size, format: bytes }
-    - { label: Galleries, value: .stats.data.stats.gallery_count }
-    - { label: Performers, value: .stats.data.stats.performer_count }
-    - { label: Studios, value: .stats.data.stats.studio_count }
-    - { label: Movies, value: .stats.data.stats.movie_count }
-    - { label: Tags, value: .stats.data.stats.tag_count }
-    - { label: O Count, value: .stats.data.stats.total_o_count }
+    - { label: Scenes, key: scenes, value: .stats.data.stats.scene_count }
+    - { label: Scenes Played, key: scenesPlayed, hidden: true, value: .stats.data.stats.scenes_played }
+    - { label: Total Plays, key: playCount, hidden: true, value: .stats.data.stats.total_play_count }
+    - { label: Time Watched, key: playDuration, hidden: true, value: .stats.data.stats.total_play_duration, format: duration }
+    - { label: Scenes Size, key: sceneSize, hidden: true, value: .stats.data.stats.scenes_size, format: bytes }
+    - { label: Scenes Duration, key: sceneDuration, hidden: true, value: .stats.data.stats.scenes_duration, format: duration }
+    - { label: Images, key: images, value: .stats.data.stats.image_count }
+    - { label: Images Size, key: imageSize, hidden: true, value: .stats.data.stats.images_size, format: bytes }
+    - { label: Galleries, key: galleries, hidden: true, value: .stats.data.stats.gallery_count }
+    - { label: Performers, key: performers, hidden: true, value: .stats.data.stats.performer_count }
+    - { label: Studios, key: studios, hidden: true, value: .stats.data.stats.studio_count }
+    - { label: Movies, key: movies, hidden: true, value: .stats.data.stats.movie_count }
+    - { label: Tags, key: tags, hidden: true, value: .stats.data.stats.tag_count }
+    - { label: O Count, key: oCount, hidden: true, value: .stats.data.stats.total_o_count }
 
 tubearchivist:
   needs: [key]
@@ -216,39 +227,46 @@ tubearchivist:
     channels: /api/stats/channel
     playlists: /api/stats/playlist
   fields:
-    - { label: Queue, value: .downloads.pending // 0 }
-    - { label: Videos, value: .videos.doc_count // 0 }
-    - { label: Channels, value: .channels.doc_count // 0 }
-    - { label: Playlists, value: .playlists.doc_count // 0 }
+    - { label: Queue, key: downloads, value: .downloads.pending // 0 }
+    - { label: Videos, key: videos, value: .videos.doc_count // 0 }
+    - { label: Channels, key: channels, value: .channels.doc_count // 0 }
+    - { label: Playlists, key: playlists, value: .playlists.doc_count // 0 }
 
 channelsdvrserver:
   requests:
     status: /dvr
   fields:
-    - { label: Shows, value: .status.stats.groups }
-    - { label: Recordings, value: .status.stats.files }
-    - { label: Scheduled, value: .status.stats.jobs }
-    - { label: Passes, value: .status.stats.rules }
+    - { label: Shows, key: shows, value: .status.stats.groups }
+    - { label: Recordings, key: recordings, value: .status.stats.files }
+    - { label: Scheduled, key: scheduled, value: .status.stats.jobs }
+    - { label: Passes, key: passes, value: .status.stats.rules }
 
-# FileFlows >= 26.10 via the "Fenrus Dashboard Endpoint" (enable it in settings; its token is the key).
+# `version: 2` for FileFlows >= 26.10: uses the "Fenrus Dashboard Endpoint" (enable it; its token is the key).
 fileflows:
-  needs: [key]
+  defaults: { version: "1" }
+  computed:
+    v1: 'if ($options.version | tostring) == "2" then null else "" end'
+    v2: 'if ($options.version | tostring) == "2" then "" else null end'
   headers: { X-Webhook-Token: "{key}" }
   requests:
-    status: /webhook/fenrus
+    status1: { path: "/api/status{v1}", optional: true }
+    status2: { path: "/webhook/fenrus{v2}", optional: true }
   fields:
-    - { label: Queue, value: .status.Unprocessed }
-    - { label: Processing, value: .status.Processing }
-    - { label: Processed, value: .status.Processed }
-    - { label: Failed, value: .status.Failed }
+    - { label: Queue, key: queue, value: .status2.Unprocessed // .status1.queue }
+    - { label: Processing, key: processing, value: .status2.Processing // .status1.processing }
+    - { label: Processed, key: processed, value: .status2.Processed // .status1.processed }
+    - { label: Time, key: time, when: '$options.version == "1"', value: 'if .status1 then (.status1.time | if . == null or . == "" then "0:00" else . end) else null end', format: text }
+    - { label: Failed, key: failed, when: '$options.version == "2"', value: .status2.Failed }
 
+# username + password (Basic auth) if RomM requires a login.
 romm:
+  headers: { Authorization: "Basic {basic}" }
   requests:
     stats: /api/stats
   fields:
-    - { label: Platforms, value: .stats.PLATFORMS }
-    - { label: Games, value: .stats.ROMS }
-    - { label: Saves, value: .stats.SAVES }
-    - { label: States, value: .stats.STATES }
-    - { label: Screenshots, value: .stats.SCREENSHOTS }
-    - { label: Total Size, value: .stats.FILESIZE // .stats.TOTAL_FILESIZE_BYTES, format: bytes }
+    - { label: Platforms, key: platforms, value: .stats.PLATFORMS }
+    - { label: Games, key: totalRoms, value: .stats.ROMS }
+    - { label: Saves, key: saves, value: .stats.SAVES }
+    - { label: States, key: states, value: .stats.STATES }
+    - { label: Screenshots, key: screenshots, hidden: true, value: .stats.SCREENSHOTS }
+    - { label: Total Size, key: totalfilesize, hidden: true, value: .stats.FILESIZE // .stats.TOTAL_FILESIZE_BYTES, format: bytes }

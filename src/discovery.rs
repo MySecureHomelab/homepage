@@ -44,6 +44,7 @@ fn widget_from<'a>(
         url: options.remove("url"),
         fields,
         options,
+        ..Default::default()
     })
 }
 
@@ -60,6 +61,7 @@ pub fn from_labels(labels: &HashMap<String, String>, container_check: &str) -> O
         description: get("description"),
         check: Some(get("check").unwrap_or_else(|| container_check.into())),
         widget: widget_from(labels.iter(), "homepage.widget."),
+        ..Default::default()
     };
     Some((get("group").unwrap_or_else(|| "Docker".into()), service))
 }
@@ -96,6 +98,7 @@ pub fn from_ingress(ing: &Ingress) -> Option<Found> {
         icon: get("icon"),
         description: get("description"),
         widget: widget_from(annotations.iter(), "gethomepage.dev/widget."),
+        ..Default::default()
     };
     Some((get("group").unwrap_or_else(|| "Kubernetes".into()), service))
 }
@@ -236,7 +239,8 @@ pub async fn run(state: web::Data<State>) {
     }
 }
 
-/// Flatten sources into a stable order and drop checks and widgets the config would reject.
+/// Flatten sources into a stable order and drop checks the config would reject. Widget
+/// problems show on the service card instead.
 fn collect(
     cfg: &Config,
     sources: &BTreeMap<String, Vec<Found>>,
@@ -249,12 +253,6 @@ fn collect(
         {
             errors.push(format!("{}: ignoring invalid check {c:?}", s.name));
             s.check = None;
-        }
-        if let Some(w) = &s.widget
-            && let Err(e) = crate::widgets::validate(&cfg.widget_types, w, s.url.is_some())
-        {
-            errors.push(format!("{}: ignoring widget: {e}", s.name));
-            s.widget = None;
         }
     }
     found.sort_by(|a, b| (&a.0, &a.1.name).cmp(&(&b.0, &b.1.name)));

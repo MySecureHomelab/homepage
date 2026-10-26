@@ -89,11 +89,20 @@ pub async fn run_checks(state: web::Data<State>) {
         for g in &groups {
             for s in &g.services {
                 let Some(w) = &s.widget else { continue };
-                let Some(def) = widgets::lookup(&cfg.widget_types, &w.kind).cloned() else {
-                    continue;
-                };
                 let key = widget_key(&g.name, &s.name);
                 keys.insert(key.clone());
+                // A widget that cannot work shows why on its card instead of being fetched.
+                let checked = widgets::validate(&cfg.widget_types, w, s.url.is_some());
+                let def = widgets::lookup(&cfg.widget_types, &w.kind).cloned();
+                let (Ok(_), Some(def)) = (checked.clone(), def) else {
+                    let error = checked.err().unwrap_or_default();
+                    let stats = widgets::Stats {
+                        fields: Vec::new(),
+                        error: Some(error),
+                    };
+                    state.widgets.write().unwrap().insert(key, stats);
+                    continue;
+                };
                 let (fetcher, w, url) = (fetcher.clone(), w.clone(), s.url.clone());
                 set.spawn(async move {
                     let result = fetcher.fetch(&key, &def, &w, url.as_deref()).await;

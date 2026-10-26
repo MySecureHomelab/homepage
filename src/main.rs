@@ -45,6 +45,31 @@ struct Loaded {
     cfg: Arc<Config>,
     mtime: Option<SystemTime>,
     error: Option<String>,
+    loaded_once: bool,
+}
+
+impl Loaded {
+    fn error(&self) -> Option<ConfigError> {
+        self.error.clone().map(|message| ConfigError {
+            message,
+            has_previous: self.loaded_once,
+        })
+    }
+}
+
+/// Problems that don't stop the dashboard, logged on every (re)load.
+fn report(cfg: &Config) {
+    for issue in &cfg.issues {
+        eprintln!("config: {issue}");
+    }
+}
+
+/// Why the page may not show the config as written.
+#[derive(Clone)]
+pub struct ConfigError {
+    pub message: String,
+    /// False until a config has loaded: the page is then empty rather than stale.
+    pub has_previous: bool,
 }
 
 fn mtime(path: &Path) -> Option<SystemTime> {
@@ -54,12 +79,12 @@ fn mtime(path: &Path) -> Option<SystemTime> {
 impl State {
     /// Current config, reloaded when the file changed. A broken edit keeps the
     /// last good config and surfaces the error instead of taking the page down.
-    pub(crate) fn config(&self) -> (Arc<Config>, Option<String>) {
+    pub(crate) fn config(&self) -> (Arc<Config>, Option<ConfigError>) {
         let now = mtime(&self.path);
         {
             let l = self.loaded.read().unwrap();
             if l.mtime == now {
-                return (l.cfg.clone(), l.error.clone());
+                return (l.cfg.clone(), l.error());
             }
         }
         let mut l = self.loaded.write().unwrap();
@@ -68,6 +93,8 @@ impl State {
             match config::load(&self.path) {
                 Ok(cfg) => {
                     eprintln!("config reloaded");
+                    report(&cfg);
+                    l.loaded_once = true;
                     l.cfg = Arc::new(cfg);
                     l.error = None;
                     self.config_changed.notify_one();
@@ -79,7 +106,7 @@ impl State {
                 }
             }
         }
-        (l.cfg.clone(), l.error.clone())
+        (l.cfg.clone(), l.error())
     }
 
     /// Config groups with discovered services merged in.
@@ -93,7 +120,7 @@ impl State {
 struct Index<'a> {
     cfg: &'a Config,
     groups: Vec<Group>,
-    error: Option<String>,
+    error: Option<ConfigError>,
     widgets: HashMap<String, widgets::Stats>,
 }
 
@@ -176,20 +203,44 @@ async fn healthz() -> &'static str {
 async fn main() -> std::io::Result<()> {
     let path =
         PathBuf::from(std::env::var("HOMEPAGE_CONFIG").unwrap_or_else(|_| "config.yaml".into()));
-    let cfg = config::load(&path).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1)
-    });
+    let loaded = config::load(&path);
     if std::env::args().nth(1).as_deref() == Some("check") {
-        println!("{}: OK", path.display());
+        // Strict: any problem fails, so CI catches what the server would only report.
+        match loaded {
+            Ok(cfg) if cfg.issues.is_empty() => println!("{}: OK", path.display()),
+            Ok(cfg) => {
+                for issue in &cfg.issues {
+                    eprintln!("{}: {issue}", path.display());
+                }
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
         return Ok(());
     }
+    // A broken or missing config never stops the server: the page shows the error and the
+    // file is reloaded as soon as it changes.
+    let (cfg, error) = match loaded {
+        Ok(cfg) => {
+            report(&cfg);
+            (cfg, None)
+        }
+        Err(e) => {
+            eprintln!("config error, starting with an empty page:\n{e}");
+            (Config::empty(), Some(e))
+        }
+    };
+    let loaded_once = error.is_none();
 
     let state = web::Data::new(State {
         loaded: RwLock::new(Loaded {
             cfg: Arc::new(cfg),
             mtime: mtime(&path),
-            error: None,
+            error,
+            loaded_once,
         }),
         path,
         config_changed: Notify::new(),

@@ -329,8 +329,10 @@ To listen on localhost only, behind the proxy: `HOMEPAGE_ADDR=127.0.0.1:3000`.
 ## Migrating from gethomepage
 
 Docker labels (`homepage.*`) and Kubernetes annotations (`gethomepage.dev/*`) work as is, and
-both listen on port 3000. The config folder does not: gethomepage splits it into several files
-with other key names, Homepage reads one `config.yaml`.
+both listen on port 3000. Service entries are understood too (`href`, `siteMonitor`,
+`server` + `container`, `widgets`), and widget `fields` lists can use gethomepage's field names.
+The config folder itself differs: gethomepage splits it into several files, Homepage reads one
+`config.yaml`.
 
 [`scripts/import-gethomepage.sh`](../scripts/import-gethomepage.sh) converts the folder. It
 needs `jq`, and `yq` or Docker (it then runs the `mikefarah/yq` image).
@@ -353,18 +355,18 @@ What it converts:
 | `icon: name.png`, `mdi-x`, `si-x`, `sh-x`, URL | dashboard-icons name, or the matching CDN URL |
 | `siteMonitor` | `check: <url>` |
 | `server` + `container` | `check: docker://server/container` |
-| `widget` (or the first of `widgets`) | `widget`, options as strings |
+| `widget` (or the first of `widgets`) | `widget`, options as strings, `fields` kept |
 | `bookmarks.yaml` | `bookmarks` |
 | `{{HOMEPAGE_VAR_X}}` | `${HOMEPAGE_VAR_X}`: the same environment variables keep working |
 | `{{HOMEPAGE_FILE_X}}` | `${file:<path>}` when `HOMEPAGE_FILE_X` is set while converting, otherwise a `CHANGE_ME` path to fix |
 
 Everything else is reported on stderr as a warning and left out: other settings (colors,
 layout…), other info widgets, `ping` (no ICMP here: use `check: tcp://host:port`), nested
-groups, other service keys (`showStats`, `statusStyle`…), widget `fields` (named differently
-here, see [widget-types.md](widget-types.md)) and list or object widget options.
+groups, other service keys (`showStats`, `statusStyle`…) and list or object widget options.
 
-Widget options that only exist in gethomepage (`enableQueue`…) are kept: `homepage check` then
-names each one with the options the type accepts, so you can delete them.
+Widget options that only exist in gethomepage (`enableQueue`…) are kept. The dashboard ignores
+them and lists them in its problems banner; `homepage check` names each one with the options
+the type accepts, so you can delete them.
 
 ## Upgrading
 
@@ -379,8 +381,8 @@ The config has no migrations: if a new version rejects a key, the error names it
 
 | Symptom | Likely cause |
 |---|---|
-| The container exits right away | Invalid or missing config at startup: the error is in `docker logs homepage`. |
-| "Config error" banner | The last edit is invalid; the previous config is still served. The banner gives the line. |
+| Red "Config error" banner | The file is unreadable or not valid YAML. The banner gives the line; the last valid config (or an empty page) is shown until it is fixed. |
+| Orange "config problems" banner | Something is left out (a bad check, an unknown widget option, an unset `${VAR}`…). Open it for the list; everything else works. |
 | Edits are not picked up | Single file mounted (not the directory), or ConfigMap mounted with `subPath`. |
 | Service down although it works | Self-signed certificate (use `tcp://`), a 5xx answer, or the Homepage container cannot resolve or reach the host (test from the same Docker network). |
 | Widget "HTTP 401" / "login failed" | Wrong key or credentials, or the type expects another option: see [widget-types.md](widget-types.md). |

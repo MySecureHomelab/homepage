@@ -34,7 +34,17 @@
 </header>
 
 {% if let Some(e) = error %}
-<div class="error" role="alert"><strong>Config error, still serving the last valid config</strong><pre>{{ e }}</pre></div>
+<div class="error" role="alert">
+  <strong>{% if e.has_previous %}Config error: showing the last valid config until the file is fixed{% else %}Config error: nothing to show until the file is fixed{% endif %}</strong>
+  <pre>{{ e.message }}</pre>
+</div>
+{% endif %}
+
+{% if !cfg.issues.is_empty() %}
+<details class="error warning">
+  <summary><strong>{{ cfg.issues.len() }} config problem{% if cfg.issues.len() > 1 %}s{% endif %}</strong>, the rest of the dashboard works</summary>
+  <ul>{% for i in cfg.issues %}<li><code>{{ i }}</code></li>{% endfor %}</ul>
+</details>
 {% endif %}
 
 {% if groups.is_empty() && cfg.bookmarks.is_empty() %}

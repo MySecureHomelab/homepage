@@ -47,7 +47,8 @@ Paths, headers, form and JSON bodies can use `{option}` placeholders:
 - `{url}`: the widget url, without trailing slash (added automatically before paths).
 - any option the user sets on the widget: `{key}`, `{username}`, `{password}`, `{node}`…
 - `{basic}`: base64 of `username:password`, for `Authorization: "Basic {basic}"`.
-- `{token}`: the result of the login step.
+- `{token}`: the result of the login step. In a type without a login, `token` is an ordinary
+  option the user sets.
 - `{item}`: the current element in a [dependent request](#dependent-requests).
 
 In `path`, values are percent-encoded (except `{url}`), so a key with `&` or spaces is safe.
@@ -74,12 +75,16 @@ computed:
   today: 'now | strftime("%Y-%m-%d")'
 ```
 
-Options are validated: a user setting an option the type never uses gets an error, so every
-option a type supports must appear in a placeholder, in `needs` or in `defaults`.
+Options are validated: an option the type never uses is reported as ignored, so every option a
+type supports must appear in a placeholder, in `needs` or in `defaults`.
 
 ```yaml
 defaults: { site: default, days: "30" }   # used when the user leaves them out
 ```
+
+`defaults` can also hold a fixed `url`, for services whose API lives at a fixed address
+(`url: https://api.tailscale.com`): it is used when the widget sets no `url`, before the service
+url (which then points at the app, not its API).
 
 ### Requests
 
@@ -96,6 +101,7 @@ requests:
     # headers: { X-Extra: "{key}" }     # per-request headers
     # header: X-Total-Count             # use this response header (a string) instead of the body
     # optional: true                    # on failure the response is null instead of failing the widget
+                                        # (auth failures too, unless there is a login to retry)
 ```
 
 Like headers, `query`, `form` and JSON object entries whose placeholders are not all set are
@@ -130,9 +136,17 @@ a new login (when there is one) and a single retry.
 For services that hand out a session. Exactly one of `token`, `cookie`, `header` says where
 the session comes from; it is then available as `{token}` and cached until rejected.
 
-The login only runs when all its placeholders are set. A service usable with or without auth
-(or with an API key instead of a login) just leaves the options out: `{token}` is then unset
-and headers using it are skipped.
+The login runs when its `path` is complete and, if its query or body use placeholders, at least
+one of those entries is complete. Incomplete entries are left out, as in any request, so one
+login can take alternatives:
+
+```yaml
+# API key, or username + password
+login: { path: /api/Account/login, method: POST, json: { apiKey: "{key}", username: "{username}", password: "{password}" }, token: .token }
+```
+
+A service usable with or without auth (or with an API key instead of a login) just leaves the
+options out: the login is skipped, `{token}` is then unset and headers using it are skipped.
 
 The token can also come from a plain-text body: jq then sees the body as a string
 (`token: 'capture("Auth=(?<t>.+)").t'`).
@@ -163,6 +177,16 @@ headers: { X-Transmission-Session-Id: "{token}" }
 `value` is a [jq](https://jqlang.org/manual/) expression over the object of all responses;
 its first output is shown. Errors, `null` or no output show `–`. Widget options (with
 defaults applied) are available as `$options`, e.g. `.ifaces[] | select(.name == $options.wan)`.
+
+A field can also set:
+
+- `key`: its gethomepage name (`blocked_percent`), so `fields` lists written for gethomepage
+  select it. `fields` matches labels and keys, ignoring case.
+- `hidden: true`: only shown when the user lists it in `fields`.
+- `when`: jq over the responses, like `value` (`$options` available, values are strings).
+  When it gives false or null the field is hidden as above: `when: '$options.version == "2"'`
+  for a field that only exists in one API version, `when: '.job.state == "Printing"'` for one
+  that only makes sense in one state.
 
 `format` is one of:
 
