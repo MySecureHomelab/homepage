@@ -1,216 +1,216 @@
-# Homepage-rs : liste des fonctionnalités
+# Homepage-rs: feature list
 
-Un dashboard de homelab en Rust inspiré de [gethomepage.dev](https://gethomepage.dev), mais plus propre, plus customisable et plus complet.
+A homelab dashboard in Rust inspired by [gethomepage.dev](https://gethomepage.dev), but cleaner, more customizable and more complete.
 
-Légende : **[H]** = existe dans Homepage · **[+]** = nouveauté / amélioration · **P0/P1/P2** = priorité (P0 = MVP)
+Legend: **[H]** = exists in Homepage · **[+]** = new / improvement · **P0/P1/P2** = priority (P0 = MVP)
 
 ---
 
-## 1. Socle technique
+## 1. Technical foundation
 
-| Brique | Choix proposé | Pourquoi |
+| Component | Proposed choice | Why |
 |---|---|---|
-| Serveur HTTP | `axum` + `tokio` | standard, rapide, middleware tower |
-| Rendu | SSR (`askama` ou `maud`) + `htmx` + SSE | pas de build JS, page rendue en <50 ms, live updates sans SPA |
-| Client HTTP | `reqwest` (rustls) | appels aux API des services |
-| Config | `serde` + `serde_yaml` / TOML | typée, erreurs précises |
-| Docker | `bollard` | API Docker / Podman |
-| Kubernetes | `kube-rs` | discovery + métriques |
-| Système | `sysinfo` | CPU/RAM/disque/réseau/températures |
-| Stockage | `sqlite` (`rusqlite`/`sqlx`) | historique, uptime, état |
-| Plugins | `wasmtime` (WASI) | widgets tiers sandboxés |
-| Distribution | binaire statique unique (assets embarqués via `rust-embed`) + image Docker distroless multi-arch | |
+| HTTP server | `axum` + `tokio` | standard, fast, tower middleware |
+| Rendering | SSR (`askama` or `maud`) + `htmx` + SSE | no JS build, page rendered in <50 ms, live updates without an SPA |
+| HTTP client | `reqwest` (rustls) | calls to service APIs |
+| Config | `serde` + `serde_yaml` / TOML | typed, precise errors |
+| Docker | `bollard` | Docker / Podman API |
+| Kubernetes | `kube-rs` | discovery + metrics |
+| System | `sysinfo` | CPU/RAM/disk/network/temperatures |
+| Storage | `sqlite` (`rusqlite`/`sqlx`) | history, uptime, state |
+| Plugins | `wasmtime` (WASI) | sandboxed third-party widgets |
+| Distribution | single static binary (assets embedded via `rust-embed`) + multi-arch distroless Docker image | |
 
 ---
 
-## 2. Cœur de l'application
+## 2. Application core
 
 ### Configuration — P0
-- [H] Fichiers YAML : services, widgets, bookmarks, settings
-- [+] Un seul format au choix : YAML **ou** TOML
-- [+] Validation au démarrage avec erreurs précises (fichier, ligne, colonne, suggestion « vouliez-vous dire… »)
-- [+] Schéma JSON généré automatiquement → autocomplétion dans VS Code
-- [+] Commande `homepage check` (valide la config sans lancer le serveur, utile en CI)
-- [H] Hot reload de la config (watcher `notify`), sans redémarrage
-- [H] Substitution de variables `{{HOMEPAGE_VAR_X}}`
-- [+] Secrets depuis fichier (`_FILE`), Docker secrets, Vault, sops/age
-- [+] Includes / fragments (`!include services/media.yaml`) pour découper la config
-- [+] Templates / ancres réutilisables (ex. même auth pour 5 services)
+- [H] YAML files: services, widgets, bookmarks, settings
+- [+] A single format of your choice: YAML **or** TOML
+- [+] Validation at startup with precise errors (file, line, column, "did you mean…" suggestion)
+- [+] Automatically generated JSON schema → autocompletion in VS Code
+- [+] `homepage check` command (validates the config without starting the server, useful in CI)
+- [H] Config hot reload (`notify` watcher), no restart
+- [H] `{{HOMEPAGE_VAR_X}}` variable substitution
+- [+] Secrets from a file (`_FILE`), Docker secrets, Vault, sops/age
+- [+] Includes / fragments (`!include services/media.yaml`) to split the config
+- [+] Reusable templates / anchors (e.g. same auth for 5 services)
 
 ### Layout & UI — P0/P1
-- [H] Groupes de services, colonnes, lignes, groupes repliables
-- [H] Onglets (tabs)
-- [+] **Plusieurs pages** (`/media`, `/infra`, `/network`) avec routes dédiées
-- [+] Grille libre type Grafana (positions x/y/w/h), tailles de widget S/M/L/XL
-- [+] **Éditeur visuel** (drag & drop, édition en place) qui réécrit la config — optionnel, config-as-code reste la source de vérité
-- [+] Layout responsive spécifique mobile / tablette / TV / kiosque
-- [+] Mode kiosque (plein écran, rotation automatique des pages)
-- [H] Icônes : dashboard-icons, Material Design, Simple Icons, URL perso
-- [+] Icônes selfh.st, emojis, Lucide ; cache local des icônes (pas de requêtes externes au runtime)
-- [H] Fond d'écran perso, flou, opacité
-- [+] Fonds dynamiques (Unsplash, dossier local, selon l'heure/météo)
+- [H] Service groups, columns, rows, collapsible groups
+- [H] Tabs
+- [+] **Multiple pages** (`/media`, `/infra`, `/network`) with dedicated routes
+- [+] Free-form Grafana-style grid (x/y/w/h positions), S/M/L/XL widget sizes
+- [+] **Visual editor** (drag & drop, in-place editing) that rewrites the config — optional, config-as-code remains the source of truth
+- [+] Responsive layout specific to mobile / tablet / TV / kiosk
+- [+] Kiosk mode (fullscreen, automatic page rotation)
+- [H] Icons: dashboard-icons, Material Design, Simple Icons, custom URL
+- [+] selfh.st icons, emojis, Lucide; local icon cache (no external requests at runtime)
+- [H] Custom background image, blur, opacity
+- [+] Dynamic backgrounds (Unsplash, local folder, based on time of day/weather)
 
-### Thèmes & personnalisation — P1
-- [H] Clair/sombre, palettes de couleurs
-- [+] Système de thèmes complet par variables CSS (fichier `theme.toml`)
-- [+] Suivi automatique du thème système + bascule planifiée (jour/nuit)
-- [+] CSS et JS personnalisés injectés (déjà dans H, mais avec rechargement à chaud)
-- [+] Thèmes communautaires prêts : Catppuccin, Nord, Dracula, Gruvbox, Tokyo Night, Solarized
-- [+] Polices personnalisées (auto-hébergées)
-- [+] Personnalisation par carte : couleur, bordure, transparence, style compact/détaillé
+### Themes & customization — P1
+- [H] Light/dark, color palettes
+- [+] Full theme system via CSS variables (`theme.toml` file)
+- [+] Automatic system theme tracking + scheduled switching (day/night)
+- [+] Injected custom CSS and JS (already in H, but with hot reload)
+- [+] Ready-made community themes: Catppuccin, Nord, Dracula, Gruvbox, Tokyo Night, Solarized
+- [+] Custom fonts (self-hosted)
+- [+] Per-card customization: color, border, transparency, compact/detailed style
 
-### Navigation & recherche — P1
-- [H] Barre de recherche web (Google, DDG, Bing, SearXNG, perso)
-- [H] Quick launch (tape pour filtrer les services)
-- [+] **Command palette** `Ctrl+K` : services, bookmarks, actions, recherche web, commandes (restart container…)
-- [+] Raccourcis clavier configurables, navigation 100 % clavier
-- [+] Bangs façon DuckDuckGo (`!gh`, `!yt`, bangs perso)
-- [+] Recherche floue (fuzzy) sur nom, description, tags
+### Navigation & search — P1
+- [H] Web search bar (Google, DDG, Bing, SearXNG, custom)
+- [H] Quick launch (type to filter services)
+- [+] **Command palette** `Ctrl+K`: services, bookmarks, actions, web search, commands (restart container…)
+- [+] Configurable keyboard shortcuts, 100% keyboard navigation
+- [+] DuckDuckGo-style bangs (`!gh`, `!yt`, custom bangs)
+- [+] Fuzzy search on name, description, tags
 
 ### Bookmarks — P0
-- [H] Groupes de liens avec icône/abréviation
-- [+] Import depuis le navigateur (HTML Netscape) / Linkwarden / Linkding
-- [+] Tags, favoris, liens les plus utilisés en premier (compteur de clics local)
+- [H] Link groups with icon/abbreviation
+- [+] Import from the browser (Netscape HTML) / Linkwarden / Linkding
+- [+] Tags, favorites, most-used links first (local click counter)
 
-### Découverte automatique — P1
+### Auto-discovery — P1
 - [H] Docker labels (`homepage.group`, `homepage.name`…)
-- [H] Kubernetes (annotations Ingress, IngressRoute Traefik, HTTPRoute)
-- [+] Podman, Docker Swarm, multi-hôtes Docker (socket, TCP+TLS, SSH)
-- [+] Proxmox (VMs/LXC auto), Traefik/Caddy/NPM (routes → services auto)
+- [H] Kubernetes (Ingress annotations, Traefik IngressRoute, HTTPRoute)
+- [+] Podman, Docker Swarm, multi-host Docker (socket, TCP+TLS, SSH)
+- [+] Proxmox (auto VMs/LXC), Traefik/Caddy/NPM (routes → automatic services)
 - [+] Nomad, Consul
-- [+] Fusion intelligente découverte + config manuelle (override par nom)
+- [+] Smart merge of discovery + manual config (override by name)
 
-### Statut des services — P0
+### Service status — P0
 - [H] Ping / siteMonitor (HTTP)
-- [H] Statut container Docker / pod K8s
-- [+] Checks TCP, ICMP, DNS, TLS (expiration certificat), gRPC health, commande custom
-- [+] Codes HTTP attendus, regex sur le body, timeouts configurables
-- [+] **Historique** (SQLite) : sparkline de latence, % uptime 24h/7j/30j
-- [+] Page de statut publique optionnelle (façon Uptime Kuma, en lecture seule)
+- [H] Docker container / K8s pod status
+- [+] TCP, ICMP, DNS, TLS (certificate expiry), gRPC health, custom command checks
+- [+] Expected HTTP codes, regex on the body, configurable timeouts
+- [+] **History** (SQLite): latency sparkline, 24h/7d/30d uptime %
+- [+] Optional public status page (Uptime Kuma-style, read-only)
 
 ### Alerting & notifications — P2
-- [+] Alerte sur service down, cert qui expire, disque plein, update dispo
-- [+] Canaux : ntfy, Gotify, Discord, Slack, Telegram, Matrix, email (SMTP), webhook générique, Apprise
-- [+] Fenêtres de maintenance, anti-flapping, regroupement
+- [+] Alerts on service down, expiring cert, full disk, update available
+- [+] Channels: ntfy, Gotify, Discord, Slack, Telegram, Matrix, email (SMTP), generic webhook, Apprise
+- [+] Maintenance windows, anti-flapping, grouping
 
-### Sécurité & multi-utilisateurs — P1
-- [+] Authentification intégrée : local (argon2), **OIDC** (Authelia, Authentik, Keycloak, Pocket ID), forward-auth (en-têtes `Remote-User` / `Remote-Groups`)
-- [+] Visibilité par utilisateur/groupe (groupes, services, widgets, pages)
-- [+] Dashboards personnels par utilisateur
-- [+] Les clés API ne sont **jamais** envoyées au navigateur (tout passe par le backend) — Homepage le fait aussi, on le garde strict
-- [+] Liste blanche des hôtes autorisés (`allowedHosts`), CSP stricte, en-têtes de sécurité
-- [+] Actions protégées (restart container, wake-on-LAN) derrière un rôle + confirmation
-- [+] Journal d'audit des actions
+### Security & multi-user — P1
+- [+] Built-in authentication: local (argon2), **OIDC** (Authelia, Authentik, Keycloak, Pocket ID), forward-auth (`Remote-User` / `Remote-Groups` headers)
+- [+] Per-user/group visibility (groups, services, widgets, pages)
+- [+] Personal dashboards per user
+- [+] API keys are **never** sent to the browser (everything goes through the backend) — Homepage does this too, we keep it strict
+- [+] Allowed hosts whitelist (`allowedHosts`), strict CSP, security headers
+- [+] Protected actions (restart container, wake-on-LAN) behind a role + confirmation
+- [+] Action audit log
 
-### Performance & robustesse — P0
-- [+] Cache par widget avec TTL configurable, rafraîchissement en arrière-plan (stale-while-revalidate)
-- [+] Live updates en SSE au lieu de polling côté client
-- [+] Timeouts, retry avec backoff, circuit breaker par service (un service lent ne bloque pas la page)
-- [+] Démarrage < 100 ms, RAM < 20 Mo
-- [+] Endpoints `/healthz`, `/metrics` (Prometheus) pour monitorer le dashboard lui-même
+### Performance & robustness — P0
+- [+] Per-widget cache with configurable TTL, background refresh (stale-while-revalidate)
+- [+] Live updates via SSE instead of client-side polling
+- [+] Timeouts, retry with backoff, per-service circuit breaker (a slow service doesn't block the page)
+- [+] Startup < 100 ms, RAM < 20 MB
+- [+] `/healthz`, `/metrics` (Prometheus) endpoints to monitor the dashboard itself
 
-### Extensibilité — P2
-- [+] **Widget générique API** (custom API de H en mieux) : URL, auth, JSONPath/JMESPath, mapping de champs, formatage (octets, %, durée, date), seuils de couleur
-- [+] Widget générique Prometheus (requête PromQL → valeur/graphique)
-- [+] Widget générique HTML/iframe/Markdown
-- [+] Widget « commande shell » (sortie d'une commande, en lecture seule, opt-in)
-- [+] **Plugins WASM** : widgets tiers sandboxés, sans recompiler
-- [+] API REST/JSON pour lire l'état (intégration Home Assistant, scripts)
-- [+] i18n (fr, en, de, es… via fichiers Fluent)
-- [+] PWA installable, mode hors ligne (dernière valeur connue)
+### Extensibility — P2
+- [+] **Generic API widget** (H's custom API, improved): URL, auth, JSONPath/JMESPath, field mapping, formatting (bytes, %, duration, date), color thresholds
+- [+] Generic Prometheus widget (PromQL query → value/graph)
+- [+] Generic HTML/iframe/Markdown widget
+- [+] "Shell command" widget (command output, read-only, opt-in)
+- [+] **WASM plugins**: sandboxed third-party widgets, no recompiling
+- [+] REST/JSON API to read state (Home Assistant integration, scripts)
+- [+] i18n (fr, en, de, es… via Fluent files)
+- [+] Installable PWA, offline mode (last known value)
 
 ---
 
-## 3. Widgets d'information (en-tête / globaux)
+## 3. Information widgets (header / global)
 
-| Widget | Détails | Prio |
+| Widget | Details | Prio |
 |---|---|---|
-| Date / heure | formats, fuseaux multiples | P0 |
-| Greeting | message selon l'heure, nom de l'utilisateur | P0 |
-| Logo | logo perso | P0 |
-| Recherche | voir section navigation | P0 |
-| Ressources système | CPU, RAM, disque, uptime, température, réseau, load | P0 |
-| Météo | Open-Meteo (sans clé), OpenWeatherMap | P0 |
-| Glances (info) | ressources d'un hôte distant | P1 |
-| Kubernetes (info) | CPU/RAM du cluster et des nœuds | P1 |
+| Date / time | formats, multiple time zones | P0 |
+| Greeting | message based on time of day, user name | P0 |
+| Logo | custom logo | P0 |
+| Search | see navigation section | P0 |
+| System resources | CPU, RAM, disk, uptime, temperature, network, load | P0 |
+| Weather | Open-Meteo (no key), OpenWeatherMap | P0 |
+| Glances (info) | resources of a remote host | P1 |
+| Kubernetes (info) | cluster and node CPU/RAM | P1 |
 | Longhorn | volumes | P2 |
-| UniFi console | stats réseau | P1 |
+| UniFi console | network stats | P1 |
 | Stocks / crypto | Finnhub, CoinGecko | P2 |
-| **[+] Calendrier** | iCal/CalDAV (Nextcloud, Google), agenda du jour | P1 |
+| **[+] Calendar** | iCal/CalDAV (Nextcloud, Google), today's agenda | P1 |
 | **[+] Todo** | CalDAV VTODO, Vikunja, Todoist | P2 |
-| **[+] Flux RSS/Atom** | liste d'articles avec cache | P1 |
-| **[+] Notes / Markdown** | bloc de texte libre | P1 |
-| **[+] Compte à rebours** | événements, dates clés | P2 |
-| **[+] Lever/coucher du soleil, lune** | calcul local | P2 |
-| **[+] Qualité de l'air / pollen** | Open-Meteo | P2 |
-| **[+] Graphique Prometheus** | requête libre | P1 |
-| **[+] IP publique / VPN** | IP WAN, statut VPN, géoloc | P1 |
-| **[+] Speedtest local** | historique de débit | P2 |
-| **[+] Certificats TLS** | jours restants par domaine | P1 |
-| **[+] Mises à jour** | Diun / WUD / images Docker obsolètes | P1 |
-| **[+] Wake-on-LAN** | bouton par machine | P2 |
-| **[+] Lecteur en cours** | Spotify, Jellyfin, Plex « now playing » | P2 |
-| **[+] Iframe / embed** | Grafana, cam, autre | P1 |
-| **[+] Caméra** | snapshot MJPEG/RTSP via Frigate/go2rtc | P2 |
+| **[+] RSS/Atom feed** | article list with cache | P1 |
+| **[+] Notes / Markdown** | free-form text block | P1 |
+| **[+] Countdown** | events, key dates | P2 |
+| **[+] Sunrise/sunset, moon** | local calculation | P2 |
+| **[+] Air quality / pollen** | Open-Meteo | P2 |
+| **[+] Prometheus graph** | free-form query | P1 |
+| **[+] Public IP / VPN** | WAN IP, VPN status, geolocation | P1 |
+| **[+] Local speedtest** | throughput history | P2 |
+| **[+] TLS certificates** | days remaining per domain | P1 |
+| **[+] Updates** | Diun / WUD / outdated Docker images | P1 |
+| **[+] Wake-on-LAN** | per-machine button | P2 |
+| **[+] Now playing** | Spotify, Jellyfin, Plex "now playing" | P2 |
+| **[+] Iframe / embed** | Grafana, camera, other | P1 |
+| **[+] Camera** | MJPEG/RTSP snapshot via Frigate/go2rtc | P2 |
 
 ---
 
-## 4. Widgets de services (intégrations API)
+## 4. Service widgets (API integrations)
 
-Homepage en a ~150. Liste complète ci-dessous, triée par catégorie. Les **[+]** n'existent pas (ou partiellement) dans Homepage.
+Homepage has ~150. Full list below, sorted by category. **[+]** items don't exist (or only partially) in Homepage.
 
-### Médias — serveurs & lecture
+### Media — servers & playback
 Jellyfin, Emby, Plex, Tautulli, Jellystat, Navidrome, Audiobookshelf, Komga, Kavita, Calibre-web, Stash, Immich, PhotoPrism, Owncast, Channels DVR, Tdarr, Unmanic, [+] Lyrion/LMS, [+] Funkwhale, [+] Pinchflat, [+] Tube Archivist
 
-### Médias — *arr & requêtes
-Sonarr, Radarr, Lidarr, Readarr, Bazarr, Prowlarr, Jackett, Mylar, Whisparr, Overseerr, Jellyseerr, Ombi, Autobrr, Kometa, [+] Huntarr, [+] Recyclarr (statut sync), [+] Maintainerr, [+] Cleanuparr, [+] Profilarr
+### Media — *arr & requests
+Sonarr, Radarr, Lidarr, Readarr, Bazarr, Prowlarr, Jackett, Mylar, Whisparr, Overseerr, Jellyseerr, Ombi, Autobrr, Kometa, [+] Huntarr, [+] Recyclarr (sync status), [+] Maintainerr, [+] Cleanuparr, [+] Profilarr
 
-### Téléchargement
+### Downloads
 qBittorrent, Transmission, Deluge, rTorrent/ruTorrent, Flood, NZBGet, SABnzbd, Pyload, JDownloader, Aria2, [+] Unpackerr
 
-### Réseau & DNS
+### Network & DNS
 Pi-hole, AdGuard Home, Technitium DNS, NextDNS, Blocky, UniFi, Omada, OPNsense, pfSense, MikroTik, OpenWRT, Fritz!Box, Tailscale, Headscale, NetAlertX, Gluetun, WireGuard (wg-easy), [+] Netbird, [+] CrowdSec, [+] Zerotier, [+] Firewalla, [+] Unbound
 
-### Reverse proxy & sécurité
-Traefik, Caddy, Nginx Proxy Manager, Authentik, Authelia (statut), Cloudflare Tunnels, CrowdSec, Fail2ban (via API), Vaultwarden (statut), [+] Zoraxy, [+] Pangolin, [+] Pocket ID, [+] Keycloak
+### Reverse proxy & security
+Traefik, Caddy, Nginx Proxy Manager, Authentik, Authelia (status), Cloudflare Tunnels, CrowdSec, Fail2ban (via API), Vaultwarden (status), [+] Zoraxy, [+] Pangolin, [+] Pocket ID, [+] Keycloak
 
-### Infra & virtualisation
-Proxmox, Proxmox Backup Server, TrueNAS, Unraid, OpenMediaVault, Synology (Disk Station, Download Station), QNAP, Portainer, Dockge, Komodo, Kubernetes, Docker (stats container), Nomad, ESXi, XCP-ng / Xen Orchestra, Glances, Netdata, Beszel, Scrutiny, Uptime Kuma, Gatus, Healthchecks, Uptime Robot, [+] Incus/LXD, [+] Harvester, [+] Coolify, [+] Dokploy, [+] Ceph, [+] ZFS natif (zpool status)
+### Infra & virtualization
+Proxmox, Proxmox Backup Server, TrueNAS, Unraid, OpenMediaVault, Synology (Disk Station, Download Station), QNAP, Portainer, Dockge, Komodo, Kubernetes, Docker (container stats), Nomad, ESXi, XCP-ng / Xen Orchestra, Glances, Netdata, Beszel, Scrutiny, Uptime Kuma, Gatus, Healthchecks, Uptime Robot, [+] Incus/LXD, [+] Harvester, [+] Coolify, [+] Dokploy, [+] Ceph, [+] native ZFS (zpool status)
 
-### Monitoring & observabilité
-Prometheus, Grafana, Uptime Kuma, Gatus, Healthchecks.io, Netdata, Glances, Beszel, [+] Loki, [+] Alertmanager (alertes actives), [+] VictoriaMetrics, [+] InfluxDB, [+] Zabbix, [+] Checkmk, [+] ClickHouse/ClickStack
+### Monitoring & observability
+Prometheus, Grafana, Uptime Kuma, Gatus, Healthchecks.io, Netdata, Glances, Beszel, [+] Loki, [+] Alertmanager (active alerts), [+] VictoriaMetrics, [+] InfluxDB, [+] Zabbix, [+] Checkmk, [+] ClickHouse/ClickStack
 
-### Sauvegardes
+### Backups
 Proxmox Backup Server, Duplicati, [+] Restic (REST server), [+] Borg/Borgmatic, [+] Kopia, [+] Backrest, [+] Velero, [+] Urbackup
 
-### Domotique & IoT
-Home Assistant, ESPHome, Homebridge, Frigate, Zigbee2MQTT, Node-RED, Scrypted, [+] MQTT générique, [+] Shelly, [+] Tasmota, [+] Hubitat, [+] Domoticz, [+] OpenHAB, [+] Victron/Enphase (énergie solaire), [+] onduleur NUT/PeaNUT, [+] Tesla/Teslamate
+### Home automation & IoT
+Home Assistant, ESPHome, Homebridge, Frigate, Zigbee2MQTT, Node-RED, Scrypted, [+] Generic MQTT, [+] Shelly, [+] Tasmota, [+] Hubitat, [+] Domoticz, [+] OpenHAB, [+] Victron/Enphase (solar energy), [+] NUT/PeaNUT UPS, [+] Tesla/Teslamate
 
-### Productivité & documents
+### Productivity & documents
 Nextcloud, Paperless-ngx, Mealie, Tandoor, Grocy, Vikunja, Linkwarden, Wallabag, Miniflux, FreshRSS, Kavita, Gitea, Forgejo, GitLab, Gitlab CI, Gotify, ntfy, Changedetection.io, [+] Karakeep (Hoarder), [+] Linkding, [+] Outline, [+] BookStack, [+] Wiki.js, [+] Immich, [+] Actual Budget, [+] Firefly III, [+] Ghostfolio, [+] Stirling PDF, [+] Seafile
 
-### Développement & CI
+### Development & CI
 Gitea, Forgejo, GitLab, GitHub (via API), Jenkins, Drone/Woodpecker, ArgoCD, [+] Harbor, [+] Renovate, [+] Sentry, [+] SonarQube
 
-### Jeux
+### Games
 Minecraft, GameDig (CS, Valheim, Ark…), Pterodactyl, Crafty Controller, [+] AMP, [+] Romm, [+] Steam (stats)
 
-### Divers
-Speedtest Tracker, MySpeed, PeaNUT, NUT, Moonraker/Klipper, OctoPrint, PrusaLink, Calendar, Evcc, Mailcow, Stalwart, [+] Syncthing, [+] Ollama / Open WebUI (modèles chargés), [+] LiteLLM, [+] Frigate stats, [+] Docker registry
+### Miscellaneous
+Speedtest Tracker, MySpeed, PeaNUT, NUT, Moonraker/Klipper, OctoPrint, PrusaLink, Calendar, Evcc, Mailcow, Stalwart, [+] Syncthing, [+] Ollama / Open WebUI (loaded models), [+] LiteLLM, [+] Frigate stats, [+] Docker registry
 
-### Widgets génériques (remplacent 80 % des intégrations manquantes)
-- **Custom API** (JSON) + mapping de champs — P0
+### Generic widgets (replace 80% of the missing integrations)
+- **Custom API** (JSON) + field mapping — P0
 - **Prometheus / PromQL** — P1
 - **Ping / HTTP / TCP / DNS / TLS** — P0
 - **iframe / Markdown / HTML** — P1
-- **Plugin WASM** — P2
+- **WASM plugin** — P2
 
 ---
 
-## 5. Roadmap proposée
+## 5. Proposed roadmap
 
-1. **MVP (P0)** : serveur axum, config YAML validée + hot reload, groupes/services/bookmarks, statut HTTP/ping, ressources système, date/heure, météo, recherche, custom API widget, thème clair/sombre, image Docker.
-2. **v0.2** : Docker/K8s discovery, ~20 widgets les plus utilisés (Jellyfin, Plex, *arr, qBittorrent, Pi-hole, AdGuard, Proxmox, TrueNAS, Home Assistant, Uptime Kuma, Immich, Nextcloud, Traefik, Portainer…), historique SQLite, command palette.
-3. **v0.3** : auth OIDC/forward-auth + visibilité par groupe, multi-pages, thèmes, calendrier/RSS, Prometheus.
-4. **v0.4** : alerting, éditeur visuel, page de statut publique.
-5. **v1.0** : plugins WASM, le reste des intégrations, i18n, PWA.
+1. **MVP (P0)**: axum server, validated YAML config + hot reload, groups/services/bookmarks, HTTP/ping status, system resources, date/time, weather, search, custom API widget, light/dark theme, Docker image.
+2. **v0.2**: Docker/K8s discovery, ~20 most-used widgets (Jellyfin, Plex, *arr, qBittorrent, Pi-hole, AdGuard, Proxmox, TrueNAS, Home Assistant, Uptime Kuma, Immich, Nextcloud, Traefik, Portainer…), SQLite history, command palette.
+3. **v0.3**: OIDC/forward-auth + per-group visibility, multi-page, themes, calendar/RSS, Prometheus.
+4. **v0.4**: alerting, visual editor, public status page.
+5. **v1.0**: WASM plugins, the remaining integrations, i18n, PWA.

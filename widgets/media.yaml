@@ -97,9 +97,9 @@ audiobookshelf:
       each: '[.libraries.libraries[]? | select(.mediaType == "podcast") | .id]'
   fields:
     - { label: Podcasts, value: "[.podcasts[].totalItems | tonumber? // 0] | add // 0" }
-    - { label: Duration, value: "[.podcasts[].totalDuration | tonumber? // 0] | add // 0", format: duration }
+    - { label: Podcast Duration, value: "[.podcasts[].totalDuration | tonumber? // 0] | add // 0", format: duration }
     - { label: Books, value: "[.books[].totalItems | tonumber? // 0] | add // 0" }
-    - { label: Duration, value: "[.books[].totalDuration | tonumber? // 0] | add // 0", format: duration }
+    - { label: Book Duration, value: "[.books[].totalDuration | tonumber? // 0] | add // 0", format: duration }
 
 # Basic auth (username + password) or API key.
 komga:

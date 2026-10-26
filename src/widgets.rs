@@ -183,10 +183,12 @@ pub fn lookup<'a>(custom: &'a BTreeMap<String, Definition>, kind: &str) -> Optio
 
 // ---------- validation ----------
 
+/// Same rule as `fill`: only `{simple_name}` is a placeholder, other braces (JSON) are literal.
 fn placeholders(s: &str) -> impl Iterator<Item = &str> {
     s.split('{')
         .skip(1)
         .filter_map(|p| p.split_once('}').map(|(name, _)| name))
+        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
 }
 
 impl Definition {
@@ -943,6 +945,12 @@ mod tests {
         for (name, def) in BUILTIN.iter() {
             def.validate()
                 .unwrap_or_else(|e| panic!("widget {name}: {e}"));
+            let labels: BTreeSet<&str> = def.fields.iter().map(|f| f.label.as_str()).collect();
+            assert_eq!(
+                labels.len(),
+                def.fields.len(),
+                "widget {name}: duplicate field label"
+            );
         }
     }
 
@@ -1060,5 +1068,91 @@ fields:
         )
         .unwrap();
         assert!(token_no_login.validate().is_err());
+    }
+
+    /// `docs/widget-types.md` lists every built-in type; this keeps it in sync.
+    /// Regenerate with `UPDATE_DOCS=1 cargo test widget_types_doc`.
+    #[test]
+    fn widget_types_doc() {
+        let code = |s: &str| format!("`{s}`");
+        let mut doc = String::from(
+            "# Built-in widget types\n\n\
+             Generated from [`widgets/*.yaml`](../widgets) by `UPDATE_DOCS=1 cargo test widget_types_doc`, \
+             do not edit by hand. How widgets work and how to write new types: \
+             [widgets.md](widgets.md).\n\n\
+             Every type also accepts `url` (the API address, when it differs from the service url) \
+             and `fields` (which fields to show, in order). Fields are listed in their default \
+             display order.\n",
+        );
+        for src in BUILTIN_SOURCES {
+            let title = src
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim_start_matches("# ")
+                .trim_end_matches('.');
+            let defs: BTreeMap<String, Definition> = serde_saphyr::from_str(src).unwrap();
+            // Comment lines right above a type are its notes (the file header is followed by a blank line).
+            let lines: Vec<&str> = src.lines().collect();
+            let notes = |name: &str| {
+                let at = lines
+                    .iter()
+                    .position(|l| *l == format!("{name}:"))
+                    .unwrap_or(0);
+                let mut start = at;
+                while start > 0 && lines[start - 1].starts_with('#') {
+                    start -= 1;
+                }
+                if start == 0 {
+                    start = at;
+                }
+                // Plus trailing comments on the definition's own keys (`needs: [key]  # …`).
+                let own = lines[at + 1..]
+                    .iter()
+                    .take_while(|l| l.is_empty() || l.starts_with(' '))
+                    .filter(|l| l.starts_with("  ") && !l.starts_with("   "))
+                    .filter_map(|l| l.split_once("  # ").map(|(_, c)| c));
+                let header: Vec<&str> = lines[start..at]
+                    .iter()
+                    .map(|l| l.trim_start_matches(['#', ' ']))
+                    .collect();
+                let mut text = vec![header.join(" ")];
+                text.extend(own.map(String::from));
+                text.retain(|t| !t.is_empty());
+                text.join(" · ").replace('|', "\\|")
+            };
+            doc += &format!(
+                "\n## {title}\n\n| Type | Required options | Optional options | Fields | Notes |\n|---|---|---|---|---|\n"
+            );
+            for (name, def) in &defs {
+                let optional: Vec<String> = def
+                    .options()
+                    .into_iter()
+                    .filter(|o| !def.needs.contains(o))
+                    .map(|o| match def.defaults.get(&o) {
+                        Some(d) => format!("`{o}` (default `{d:?}`)"),
+                        None => code(&o),
+                    })
+                    .collect();
+                let needs: Vec<String> = def.needs.iter().map(|n| code(n)).collect();
+                let fields: Vec<&str> = def.fields.iter().map(|f| f.label.as_str()).collect();
+                doc += &format!(
+                    "| `{name}` | {} | {} | {} | {} |\n",
+                    needs.join(", "),
+                    optional.join(", "),
+                    fields.join(", "),
+                    notes(name)
+                );
+            }
+        }
+        let path = "docs/widget-types.md";
+        if std::env::var_os("UPDATE_DOCS").is_some() {
+            std::fs::write(path, &doc).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap_or_default(),
+            doc,
+            "{path} is stale, run: UPDATE_DOCS=1 cargo test widget_types_doc"
+        );
     }
 }

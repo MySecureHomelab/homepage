@@ -1,0 +1,176 @@
+# Demo dashboard used for the README screenshot: fake apps whose widgets read docs/demo/api.json.
+# Run it with the `demo` and `demo-api` entries of .claude/launch.json, or by hand:
+#   python3 -m http.server 3101 --bind 127.0.0.1 --directory docs/demo
+#   HOMEPAGE_CONFIG=docs/demo/config.yaml HOMEPAGE_ADDR=127.0.0.1:3100 cargo run --release
+title: Homelab
+theme: dark
+check_interval: 10
+widgets: [clock, search, resources]
+
+groups:
+  - name: Media
+    services:
+      - name: Jellyfin
+        url: https://jellyfin.home.lan
+        icon: jellyfin
+        description: Movies & shows
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_jellyfin, url: http://127.0.0.1:3101, fields: [Playing, Movies, Series] }
+      - name: Immich
+        url: https://photos.home.lan
+        icon: immich
+        description: Photos
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_immich, url: http://127.0.0.1:3101 }
+      - name: Plex
+        url: https://plex.home.lan
+        icon: plex
+        description: Legacy library
+        check: tcp://127.0.0.1:1
+
+  - name: Arr & downloads
+    services:
+      - name: Sonarr
+        url: https://sonarr.home.lan
+        icon: sonarr
+        description: Shows
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_sonarr, url: http://127.0.0.1:3101 }
+      - name: Radarr
+        url: https://radarr.home.lan
+        icon: radarr
+        description: Movies
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_radarr, url: http://127.0.0.1:3101 }
+      - name: qBittorrent
+        url: https://torrent.home.lan
+        icon: qbittorrent
+        description: Torrents
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_qbittorrent, url: http://127.0.0.1:3101, fields: [Leech, Download, Upload] }
+
+  - name: Network
+    services:
+      - name: Pi-hole
+        url: https://pihole.home.lan/admin
+        icon: pi-hole
+        description: DNS filtering
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_pihole, url: http://127.0.0.1:3101 }
+      - name: Traefik
+        url: https://traefik.home.lan
+        icon: traefik
+        description: Reverse proxy
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_traefik, url: http://127.0.0.1:3101 }
+      - name: Tailscale
+        url: https://login.tailscale.com/admin
+        icon: tailscale
+        description: homelab-gw
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_tailscale, url: http://127.0.0.1:3101 }
+
+  - name: Infrastructure
+    services:
+      - name: Proxmox
+        url: https://pve.home.lan:8006
+        icon: proxmox
+        description: pve-01
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_proxmox, url: http://127.0.0.1:3101, fields: [VMs, LXC, CPU] }
+      - name: TrueNAS
+        url: https://nas.home.lan
+        icon: truenas
+        description: tank · 4×8 TB
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_truenas, url: http://127.0.0.1:3101, fields: [Uptime, Alerts, Pool Used] }
+      - name: Home Assistant
+        url: https://ha.home.lan
+        icon: home-assistant
+        description: 3 people home
+        check: http://127.0.0.1:3101/
+        widget: { type: demo_homeassistant, url: http://127.0.0.1:3101, fields: [Lights On, Switches On] }
+
+bookmarks:
+  - name: Dev
+    links:
+      - { name: GitHub, url: https://github.com, icon: github-light }
+      - { name: Gitea, url: https://git.home.lan, icon: gitea }
+      - { name: Docker Hub, url: https://hub.docker.com, icon: docker }
+  - name: Homelab
+    links:
+      - { name: Grafana, url: https://grafana.home.lan, icon: grafana }
+      - { name: Vaultwarden, url: https://vault.home.lan, icon: vaultwarden }
+      - { name: UniFi, url: https://unifi.home.lan, icon: ubiquiti-unifi }
+
+# One fake type per app, all reading the same static file.
+widget_types:
+  demo_jellyfin:
+    requests: { d: /api.json }
+    fields:
+      - { label: Playing, value: .d.jellyfin.playing }
+      - { label: Movies, value: .d.jellyfin.movies }
+      - { label: Series, value: .d.jellyfin.series }
+      - { label: Episodes, value: .d.jellyfin.episodes }
+  demo_immich:
+    requests: { d: /api.json }
+    fields:
+      - { label: Photos, value: .d.immich.photos }
+      - { label: Videos, value: .d.immich.videos }
+      - { label: Storage, value: .d.immich.storage, format: bytes }
+  demo_sonarr:
+    requests: { d: /api.json }
+    fields:
+      - { label: Wanted, value: .d.sonarr.wanted }
+      - { label: Queued, value: .d.sonarr.queued }
+      - { label: Series, value: .d.sonarr.series }
+  demo_radarr:
+    requests: { d: /api.json }
+    fields:
+      - { label: Wanted, value: .d.radarr.wanted }
+      - { label: Queued, value: .d.radarr.queued }
+      - { label: Movies, value: .d.radarr.movies }
+  demo_qbittorrent:
+    requests: { d: /api.json }
+    fields:
+      - { label: Leech, value: .d.qbittorrent.leech }
+      - { label: Download, value: .d.qbittorrent.download, format: rate }
+      - { label: Seed, value: .d.qbittorrent.seed }
+      - { label: Upload, value: .d.qbittorrent.upload, format: rate }
+  demo_pihole:
+    requests: { d: /api.json }
+    fields:
+      - { label: Queries, value: .d.pihole.queries }
+      - { label: Blocked, value: .d.pihole.blocked }
+      - { label: Blocked %, value: .d.pihole.percent, format: percent }
+  demo_traefik:
+    requests: { d: /api.json }
+    fields:
+      - { label: Routers, value: .d.traefik.routers }
+      - { label: Services, value: .d.traefik.services }
+      - { label: Middlewares, value: .d.traefik.middlewares }
+  demo_tailscale:
+    requests: { d: /api.json }
+    fields:
+      - { label: Address, value: .d.tailscale.address, format: text }
+      - { label: Expires, value: .d.tailscale.expires, format: text }
+  demo_proxmox:
+    requests: { d: /api.json }
+    fields:
+      - { label: VMs, value: .d.proxmox.vms, format: text }
+      - { label: LXC, value: .d.proxmox.lxc, format: text }
+      - { label: CPU, value: .d.proxmox.cpu, format: percent }
+      - { label: MEM, value: .d.proxmox.mem, format: percent }
+  demo_truenas:
+    requests: { d: /api.json }
+    fields:
+      - { label: Load, value: .d.truenas.load }
+      - { label: Uptime, value: .d.truenas.uptime, format: duration }
+      - { label: Alerts, value: .d.truenas.alerts }
+      - { label: Pool Used, value: .d.truenas.used, format: percent }
+  demo_homeassistant:
+    requests: { d: /api.json }
+    fields:
+      - { label: People Home, value: .d.homeassistant.people, format: text }
+      - { label: Lights On, value: .d.homeassistant.lights, format: text }
+      - { label: Switches On, value: .d.homeassistant.switches, format: text }

@@ -1,6 +1,8 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "homepage", "runtimeExecutable": "cargo", "runtimeArgs": ["run"], "port": 3000 }
+    { "name": "homepage", "runtimeExecutable": "cargo", "runtimeArgs": ["run"], "port": 3000 },
+    { "name": "demo-api", "runtimeExecutable": "python3", "runtimeArgs": ["-m", "http.server", "3101", "--bind", "127.0.0.1", "--directory", "docs/demo"], "port": 3101 },
+    { "name": "demo", "runtimeExecutable": "env", "runtimeArgs": ["HOMEPAGE_CONFIG=docs/demo/config.yaml", "HOMEPAGE_ADDR=127.0.0.1:3100", "cargo", "run", "--release"], "port": 3100 }
   ]
 }

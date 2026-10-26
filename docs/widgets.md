@@ -1,6 +1,7 @@
 # Service widgets
 
-A widget shows live stats from a service's API on its card.
+A widget shows live stats from a service's API on its card. The built-in types, with their
+options and fields, are listed in [widget-types.md](widget-types.md).
 
 ```yaml
 groups:
@@ -47,6 +48,12 @@ Paths, headers, form and JSON bodies can use `{option}` placeholders:
 - any option the user sets on the widget: `{key}`, `{username}`, `{password}`, `{node}`…
 - `{basic}`: base64 of `username:password`, for `Authorization: "Basic {basic}"`.
 - `{token}`: the result of the login step.
+- `{item}`: the current element in a [dependent request](#dependent-requests).
+
+In `path`, values are percent-encoded (except `{url}`), so a key with `&` or spaces is safe.
+In headers, query, form and JSON bodies they are inserted as is (query and form are encoded by
+the HTTP client). Only `{simple_name}` (letters, digits, `_`) is a placeholder: other braces, as
+in JSON or GraphQL text, are left alone.
 
 A header whose placeholders are not all set is not sent. This lets a type accept
 alternatives, e.g. API key **or** basic auth. A list gives alternatives for the same header,
@@ -169,6 +176,9 @@ defaults applied) are available as `$options`, e.g. `.ifaces[] | select(.name ==
 | `duration` | seconds | `3d 4h` |
 | `ago` | unix timestamp (s) | `2h 5m ago` — from ISO dates: `.date[:19] + "Z" \| fromdateiso8601` |
 | `text` | anything | as is |
+
+Booleans show as `yes` / `no`. A string that parses as a number is formatted as one (except with `text`); any other
+string is shown as is. Whole numbers get a thin-space thousands separator, others one decimal.
 
 Useful jq: `length`, `[.items[] | select(.active)] | length`, `[.items[].size] | add`,
 `.a / .b * 100`, `.x // 0` (default when missing), `(.list // []) | length`.

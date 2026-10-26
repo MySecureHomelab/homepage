@@ -11,7 +11,7 @@ groups:
       - name: Jellyfin
         url: https://jellyfin.lan
         icon: jellyfin
-        description: Films & séries
+        description: Movies & shows
         check: https://jellyfin.lan/health
         # widget:                    # live stats, see docs/widgets.md
         #   type: jellyfin
@@ -25,7 +25,7 @@ groups:
       - name: Proxmox
         url: https://pve.lan:8006
         icon: proxmox
-        description: Hyperviseur
+        description: Hypervisor
         check: tcp://pve.lan:8006
       - name: Homepage
         url: http://localhost:3000

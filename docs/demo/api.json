@@ -1,0 +1,60 @@
+{
+  "jellyfin": {
+    "playing": 3,
+    "movies": 1284,
+    "series": 211,
+    "episodes": 9472
+  },
+  "immich": {
+    "photos": 48213,
+    "videos": 2117,
+    "storage": 412316860416
+  },
+  "sonarr": {
+    "wanted": 14,
+    "queued": 3,
+    "series": 211
+  },
+  "radarr": {
+    "wanted": 8,
+    "queued": 2,
+    "movies": 1284
+  },
+  "qbittorrent": {
+    "leech": 4,
+    "download": 24117248,
+    "seed": 186,
+    "upload": 3355443
+  },
+  "pihole": {
+    "queries": 128734,
+    "blocked": 23841,
+    "percent": 18.5
+  },
+  "traefik": {
+    "routers": 42,
+    "services": 39,
+    "middlewares": 17
+  },
+  "tailscale": {
+    "address": "100.88.12.4",
+    "expires": "in 142 days"
+  },
+  "proxmox": {
+    "vms": "6 / 8",
+    "lxc": "14 / 15",
+    "cpu": 23,
+    "mem": 61
+  },
+  "truenas": {
+    "load": 0.42,
+    "uptime": 3891200,
+    "alerts": 0,
+    "used": 38
+  },
+  "homeassistant": {
+    "people": "2 / 2",
+    "lights": "5 / 23",
+    "switches": "3 / 11"
+  }
+}
