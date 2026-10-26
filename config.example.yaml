@@ -2,6 +2,7 @@ title: Homelab
 theme: auto          # auto | light | dark
 accent: "#7c6cf2"
 search: duckduckgo   # duckduckgo | google | bing | startpage | https://searx.lan/search?q={q}
+# side_margin: 48   # left/right margin in px; unset = centered, max 1320px
 check_interval: 30   # seconds
 widgets: [clock, search, resources]
 

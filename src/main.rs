@@ -152,11 +152,17 @@ async fn index(state: web::Data<State>) -> impl Responder {
 #[get("/app.css")]
 async fn css(state: web::Data<State>) -> impl Responder {
     // The accent is validated as #rrggbb, so it is safe to splice in.
-    let accent = state.config().0.accent.clone();
+    let (accent, margin) = {
+        let cfg = &state.config().0;
+        (cfg.accent.clone(), cfg.side_margin)
+    };
+    let margin = margin
+        .map(|px| format!("main {{ max-width: none; padding-left: {px}px; padding-right: {px}px; }}\n"))
+        .unwrap_or_default();
     HttpResponse::Ok()
         .content_type("text/css; charset=utf-8")
         .insert_header((header::CACHE_CONTROL, "no-cache"))
-        .body(format!(":root {{ --accent: {accent}; }}\n{CSS}"))
+        .body(format!(":root {{ --accent: {accent}; }}\n{CSS}{margin}"))
 }
 
 #[get("/app.js")]

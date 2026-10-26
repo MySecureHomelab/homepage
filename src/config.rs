@@ -15,6 +15,8 @@ pub struct Config {
     /// `duckduckgo`, `google`, `bing`, `startpage`, or a URL containing `{q}` (e.g. `SearXNG`).
     #[serde(default = "default_search")]
     pub search: String,
+    /// Left and right page margin in px. Unset: content centered, at most 1320px wide.
+    pub side_margin: Option<u32>,
     /// Seconds between status checks.
     #[serde(default = "default_interval")]
     pub check_interval: u64,

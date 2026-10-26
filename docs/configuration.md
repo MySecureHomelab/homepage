@@ -30,6 +30,7 @@ dashboard, see [Errors and hot reload](#hot-reload-and-errors).
 | `title` | `Homepage` | Page and browser tab title. |
 | `theme` | `auto` | `auto` (follows the OS), `light`, `dark`. |
 | `accent` | `"#7c6cf2"` | Accent color, `"#rrggbb"` only. Quote it: `#` starts a YAML comment. |
+| `side_margin` | unset | Left and right page margin, in px (e.g. `48`). Unset: content centered, at most 1320 px wide. Set: content uses the full width minus this margin. |
 | `search` | `duckduckgo` | `duckduckgo`, `google`, `bing`, `startpage`, or a URL containing `{q}` (e.g. `https://searx.lan/search?q={q}`). Used by the search bar and the command palette. |
 | `check_interval` | `30` | Seconds between rounds of status checks and service widget refreshes. At least 1. |
 | `widgets` | `[clock, search, resources]` | Header widgets to show, in this order. `[]` shows none. |
@@ -211,7 +212,7 @@ file, and everything is also written to stderr.
   check round: edits apply without a restart, and fixing the file clears the banner.
 - New services are checked right away, without waiting for `check_interval`.
 
-The CSS (accent color) and the content update when the page is reloaded. Statuses, widgets and
+The CSS (accent color, side margin) and the content update when the page is reloaded. Statuses, widgets and
 resources update on their own every 5 s.
 
 ## Docker and Kubernetes discovery
