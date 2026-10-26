@@ -9,6 +9,7 @@ several times without care.
 - [Kubernetes](#kubernetes)
 - [Binary](#binary)
 - [Reverse proxy and authentication](#reverse-proxy-and-authentication)
+- [Migrating from gethomepage](#migrating-from-gethomepage)
 - [Upgrading](#upgrading)
 - [Troubleshooting](#troubleshooting)
 - [CI/CD and releases](#cicd-and-releases)
@@ -19,8 +20,8 @@ Images are published to GitHub Container Registry, for `linux/amd64` and `linux/
 
 | Tag | Content |
 |---|---|
-| `ghcr.io/mysecurehomelab/homepage:latest` | Latest build of `main`. |
-| `ghcr.io/mysecurehomelab/homepage:X.Y.Z` | The version in `Cargo.toml`. The next build of the same version replaces it. |
+| `ghcr.io/mysecurehomelab/homepage:latest` | Latest published build of `main`. |
+| `ghcr.io/mysecurehomelab/homepage:X.Y.Z` | The version in `Cargo.toml`. The next published build of the same version replaces it. |
 | `ghcr.io/mysecurehomelab/homepage:X.Y` | Latest `X.Y.*` version. |
 | `ghcr.io/mysecurehomelab/homepage:sha-<commit>` | One exact commit, immutable. |
 
@@ -325,6 +326,46 @@ prefix: links to `app.css`, `app.js` and `api/state` are relative.
 
 To listen on localhost only, behind the proxy: `HOMEPAGE_ADDR=127.0.0.1:3000`.
 
+## Migrating from gethomepage
+
+Docker labels (`homepage.*`) and Kubernetes annotations (`gethomepage.dev/*`) work as is, and
+both listen on port 3000. The config folder does not: gethomepage splits it into several files
+with other key names, Homepage reads one `config.yaml`.
+
+[`scripts/import-gethomepage.sh`](../scripts/import-gethomepage.sh) converts the folder. It
+needs `jq`, and `yq` or Docker (it then runs the `mikefarah/yq` image).
+
+```bash
+scripts/import-gethomepage.sh /path/to/gethomepage/config > config/config.yaml
+docker run --rm -v ./config:/config:ro --env-file .env ghcr.io/mysecurehomelab/homepage:latest check
+```
+
+What it converts:
+
+| gethomepage | Homepage |
+|---|---|
+| `settings.yaml` `title`, `theme` | `title`, `theme` |
+| `widgets.yaml` `datetime`, `search`, `resources` | `widgets: [clock, search, resources]`, `search` (custom `url` gets `{q}` appended) |
+| `docker.yaml` `socket` / `host` + `port` | `docker: { name: unix://… / tcp://host:port }` |
+| `kubernetes.yaml` `mode: cluster` or `default` | `kubernetes: true` |
+| `services.yaml` groups and services | `groups` |
+| `href`, `description` | `url`, `description` |
+| `icon: name.png`, `mdi-x`, `si-x`, `sh-x`, URL | dashboard-icons name, or the matching CDN URL |
+| `siteMonitor` | `check: <url>` |
+| `server` + `container` | `check: docker://server/container` |
+| `widget` (or the first of `widgets`) | `widget`, options as strings |
+| `bookmarks.yaml` | `bookmarks` |
+| `{{HOMEPAGE_VAR_X}}` | `${HOMEPAGE_VAR_X}`: the same environment variables keep working |
+| `{{HOMEPAGE_FILE_X}}` | `${file:<path>}` when `HOMEPAGE_FILE_X` is set while converting, otherwise a `CHANGE_ME` path to fix |
+
+Everything else is reported on stderr as a warning and left out: other settings (colors,
+layout…), other info widgets, `ping` (no ICMP here: use `check: tcp://host:port`), nested
+groups, other service keys (`showStats`, `statusStyle`…), widget `fields` (named differently
+here, see [widget-types.md](widget-types.md)) and list or object widget options.
+
+Widget options that only exist in gethomepage (`enableQueue`…) are kept: `homepage check` then
+names each one with the options the type accepts, so you can delete them.
+
 ## Upgrading
 
 - Docker: `docker compose pull && docker compose up -d`.
@@ -350,22 +391,22 @@ The config has no migrations: if a new version rejects a key, the error names it
 
 ## CI/CD and releases
 
-The [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) workflow runs on every push and
-pull request:
+The [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) workflow runs on demand only:
+*Actions → CI → Run workflow* (or `gh workflow run ci.yml --ref main`).
 
 1. **check**: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` (which also
    validates `config.example.yaml`, every widget definition and that
    [widget-types.md](widget-types.md) is up to date), then `cargo build --release` and
    `homepage check` on the example config.
-2. **image**: builds the Docker image for `amd64` and `arm64` (native runners, no emulation). On
-   a pull request the image is only built, to prove the build works. On `main` it is pushed to
+2. **image**: builds the Docker image for `amd64` and `arm64` (native runners, no emulation). Run
+   on another branch, the image is only built, to prove the build works. Run on `main`, it is pushed to
    GHCR as `X.Y.Z`, `X.Y`, `latest` and `sha-<commit>`, where `X.Y.Z` is read from
    `Cargo.toml`.
 
 Releasing a version:
 
 1. Bump `version` in `Cargo.toml` (and run `cargo build` to update `Cargo.lock`).
-2. Merge to `main`: the `X.Y.Z` image is published.
+2. Merge to `main`, then run the workflow on `main`: the `X.Y.Z` image is published.
 
 The first time, the GHCR package is private: make it public under the repository's (or the
 organization's) *Packages* settings so it can be pulled without logging in.

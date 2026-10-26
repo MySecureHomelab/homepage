@@ -58,7 +58,7 @@ bookmarks:
 | | |
 |---|---|
 | [Configuration](docs/configuration.md) | Every config key, checks, icons, header widgets, secrets, hot reload, discovery labels, shortcuts, CLI, endpoints, security. |
-| [Deployment](docs/deployment.md) | Docker, Docker Compose, Kubernetes, systemd, reverse proxy and auth, upgrades, troubleshooting, CI/CD and releases. |
+| [Deployment](docs/deployment.md) | Docker, Docker Compose, Kubernetes, systemd, reverse proxy and auth, migrating from gethomepage, upgrades, troubleshooting, CI/CD and releases. |
 | [Widget types](docs/widget-types.md) | The 140 built-in widgets with their options and fields. |
 | [Writing widgets](docs/widgets.md) | The declarative widget format: requests, auth and login, jq fields, formats. |
 | [Roadmap](FEATURES.md) | Planned features. |
