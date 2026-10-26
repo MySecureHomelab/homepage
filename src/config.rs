@@ -17,6 +17,8 @@ pub struct Config {
     pub search: String,
     /// Left and right page margin in px. Unset: content centered, at most 1320px wide.
     pub side_margin: Option<u32>,
+    #[serde(default)]
+    pub background: Option<Background>,
     /// Seconds between status checks.
     #[serde(default = "default_interval")]
     pub check_interval: u64,
@@ -58,6 +60,24 @@ impl Theme {
             Theme::Dark => "dark",
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Background {
+    /// `http(s)://…` (downloaded once by the server, kept in memory) or a file path,
+    /// relative to the config file's directory.
+    pub image: String,
+    /// Blur radius in px.
+    #[serde(default)]
+    pub blur: u32,
+    /// Veil of the theme's background color over the image, 0–100 %, so text stays readable.
+    #[serde(default = "default_dim")]
+    pub dim: u8,
+}
+
+fn default_dim() -> u8 {
+    40
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq)]
@@ -243,6 +263,20 @@ impl Config {
             ));
             self.search = default_search();
         }
+        if self
+            .background
+            .as_ref()
+            .is_some_and(|b| b.image.trim().is_empty())
+        {
+            issues.push("background.image: expected a file path or an http(s):// URL".into());
+            self.background = None;
+        }
+        if let Some(b) = &mut self.background
+            && b.dim > 100
+        {
+            issues.push(format!("background.dim: expected 0 to 100, got {}", b.dim));
+            b.dim = default_dim();
+        }
         if self.check_interval == 0 {
             issues.push("check_interval: must be at least 1 second".into());
             self.check_interval = default_interval();
@@ -374,6 +408,16 @@ mod tests {
 
     fn issues(yaml: &str) -> String {
         parse(yaml).unwrap().1
+    }
+
+    #[test]
+    fn background() {
+        let (cfg, found) = parse("background: {image: bg.jpg, dim: 150}").unwrap();
+        assert!(found.contains("background.dim"));
+        let b = cfg.background.unwrap();
+        assert_eq!((b.blur, b.dim), (0, 40));
+        let (cfg, found) = parse("background: {image: ' '}").unwrap();
+        assert!(found.contains("background.image") && cfg.background.is_none());
     }
 
     #[test]

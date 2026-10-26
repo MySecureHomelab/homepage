@@ -13,9 +13,10 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     fs,
+    hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use tokio::sync::Notify;
 
@@ -39,6 +40,17 @@ pub struct State {
     /// Widget stats by `group/service`.
     pub widgets: RwLock<HashMap<String, widgets::Stats>>,
     pub resources: RwLock<Option<Resources>>,
+    /// Last downloaded remote background: its URL and the image.
+    background: RwLock<Option<(String, Image)>>,
+}
+
+/// Content type and bytes.
+type Image = (String, web::Bytes);
+
+const MAX_BACKGROUND: usize = 20 << 20;
+
+fn is_url(src: &str) -> bool {
+    src.starts_with("http://") || src.starts_with("https://")
 }
 
 struct Loaded {
@@ -109,6 +121,72 @@ impl State {
         (l.cfg.clone(), l.error())
     }
 
+    /// A local background path, relative to the config file's directory.
+    fn background_path(&self, src: &str) -> PathBuf {
+        self.path.parent().unwrap_or(Path::new(".")).join(src)
+    }
+
+    async fn background_image(&self, src: &str) -> Result<Image, String> {
+        if !is_url(src) {
+            let path = self.background_path(src);
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+            let kind = match ext.to_ascii_lowercase().as_str() {
+                "jpg" | "jpeg" => "image/jpeg".into(),
+                e @ ("png" | "webp" | "gif" | "avif") => format!("image/{e}"),
+                "svg" => "image/svg+xml".into(),
+                _ => {
+                    return Err(format!(
+                        "{}: expected a jpg, png, webp, gif, avif or svg file",
+                        path.display()
+                    ));
+                }
+            };
+            let read = path.clone();
+            let bytes = web::block(move || fs::read(read))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            return Ok((kind, bytes.into()));
+        }
+        if let Some((url, img)) = &*self.background.read().unwrap()
+            && url == src
+        {
+            return Ok(img.clone());
+        }
+        let res = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map(|c| c.get(src))
+            .map_err(|e| e.to_string())?
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| format!("{src}: {e}"))?;
+        let kind = res
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .filter(|t| t.starts_with("image/"))
+            .ok_or_else(|| format!("{src}: not an image"))?
+            .to_string();
+        if res
+            .content_length()
+            .is_some_and(|n| n as usize > MAX_BACKGROUND)
+        {
+            return Err(format!("{src}: larger than 20 MB"));
+        }
+        let bytes = res.bytes().await.map_err(|e| format!("{src}: {e}"))?;
+        if bytes.len() > MAX_BACKGROUND {
+            return Err(format!("{src}: larger than 20 MB"));
+        }
+        let img = (kind, bytes);
+        *self.background.write().unwrap() = Some((src.to_string(), img.clone()));
+        Ok(img)
+    }
+
     /// Config groups with discovered services merged in.
     pub(crate) fn groups(&self, cfg: &Config) -> Vec<Group> {
         discovery::merge(&cfg.groups, &self.discovered.read().unwrap())
@@ -152,17 +230,64 @@ async fn index(state: web::Data<State>) -> impl Responder {
 #[get("/app.css")]
 async fn css(state: web::Data<State>) -> impl Responder {
     // The accent is validated as #rrggbb, so it is safe to splice in.
-    let (accent, margin) = {
-        let cfg = &state.config().0;
-        (cfg.accent.clone(), cfg.side_margin)
-    };
-    let margin = margin
-        .map(|px| format!("main {{ max-width: none; padding-left: {px}px; padding-right: {px}px; }}\n"))
+    let cfg = state.config().0;
+    let accent = &cfg.accent;
+    let margin = cfg
+        .side_margin
+        .map(|px| {
+            format!("main {{ max-width: none; padding-left: {px}px; padding-right: {px}px; }}\n")
+        })
+        .unwrap_or_default();
+    // The image URL changes with the source (and a local file's mtime), so the browser can cache it.
+    let bg = cfg
+        .background
+        .as_ref()
+        .map(|b| {
+            let mut h = DefaultHasher::new();
+            b.image.hash(&mut h);
+            if !is_url(&b.image) {
+                mtime(&state.background_path(&b.image)).hash(&mut h);
+            }
+            format!(
+                "body::before {{ content: \"\"; position: fixed; inset: -{edge}px; z-index: -1; background: linear-gradient({veil}, {veil}), center / cover no-repeat url(\"background?v={v:x}\"); filter: blur({blur}px); }}\n",
+                veil = format_args!("color-mix(in srgb, var(--bg) {}%, transparent)", b.dim),
+                edge = b.blur * 2,
+                v = h.finish(),
+                blur = b.blur,
+            )
+        })
         .unwrap_or_default();
     HttpResponse::Ok()
         .content_type("text/css; charset=utf-8")
         .insert_header((header::CACHE_CONTROL, "no-cache"))
-        .body(format!(":root {{ --accent: {accent}; }}\n{CSS}{margin}"))
+        .body(format!(
+            ":root {{ --accent: {accent}; }}\n{CSS}{margin}{bg}"
+        ))
+}
+
+#[get("/background")]
+async fn background(state: web::Data<State>) -> impl Responder {
+    let Some(src) = state
+        .config()
+        .0
+        .background
+        .as_ref()
+        .map(|b| b.image.clone())
+    else {
+        return HttpResponse::NotFound().finish();
+    };
+    match state.background_image(&src).await {
+        Ok((kind, bytes)) => HttpResponse::Ok()
+            .content_type(kind)
+            .insert_header((header::CACHE_CONTROL, "max-age=86400"))
+            // An SVG opened directly must not run scripts.
+            .insert_header((header::CONTENT_SECURITY_POLICY, "sandbox"))
+            .body(bytes),
+        Err(e) => {
+            eprintln!("background: {e}");
+            HttpResponse::BadGateway().body(e)
+        }
+    }
 }
 
 #[get("/app.js")]
@@ -256,6 +381,7 @@ async fn main() -> std::io::Result<()> {
         status: RwLock::default(),
         widgets: RwLock::default(),
         resources: RwLock::default(),
+        background: RwLock::default(),
     });
     actix_web::rt::spawn(discovery::run(state.clone()));
     actix_web::rt::spawn(monitor::run_checks(state.clone()));
@@ -275,6 +401,7 @@ async fn main() -> std::io::Result<()> {
             .service(index)
             .service(css)
             .service(js)
+            .service(background)
             .service(api_state)
             .service(healthz)
     })

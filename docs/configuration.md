@@ -31,6 +31,7 @@ dashboard, see [Errors and hot reload](#hot-reload-and-errors).
 | `theme` | `auto` | `auto` (follows the OS), `light`, `dark`. |
 | `accent` | `"#7c6cf2"` | Accent color, `"#rrggbb"` only. Quote it: `#` starts a YAML comment. |
 | `side_margin` | unset | Left and right page margin, in px (e.g. `48`). Unset: content centered, at most 1320 px wide. Set: content uses the full width minus this margin. |
+| `background` | unset | Background image, see [Background](#background). |
 | `search` | `duckduckgo` | `duckduckgo`, `google`, `bing`, `startpage`, or a URL containing `{q}` (e.g. `https://searx.lan/search?q={q}`). Used by the search bar and the command palette. |
 | `check_interval` | `30` | Seconds between rounds of status checks and service widget refreshes. At least 1. |
 | `widgets` | `[clock, search, resources]` | Header widgets to show, in this order. `[]` shows none. |
@@ -212,8 +213,25 @@ file, and everything is also written to stderr.
   check round: edits apply without a restart, and fixing the file clears the banner.
 - New services are checked right away, without waiting for `check_interval`.
 
-The CSS (accent color, side margin) and the content update when the page is reloaded. Statuses, widgets and
+The CSS (accent color, side margin, background) and the content update when the page is reloaded. Statuses, widgets and
 resources update on their own every 5 s.
+
+## Background
+
+```yaml
+background:
+  image: background.jpg   # or https://example.com/wallpaper.jpg
+  blur: 8                 # px, 0 by default
+  dim: 40                 # %, veil of the theme's background color over the image, 40 by default
+```
+
+- `image`: a file path, relative to the config file's directory (`/config` in Docker), or an
+  `http(s)://` URL. jpg, png, webp, gif, avif or svg.
+- A URL is downloaded by the server on first use and kept in memory until the URL changes or
+  the server restarts: the browser never contacts the remote host. 20 MB at most.
+- A local file is read on each request; replacing it shows up on the next reload.
+- `dim` keeps text readable on bright images: 0 shows the image as is, 100 hides it.
+- If the image cannot be loaded, the page keeps its plain background and the server logs why.
 
 ## Docker and Kubernetes discovery
 
