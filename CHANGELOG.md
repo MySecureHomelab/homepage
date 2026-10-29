@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- `side_margin`: left and right page margin in px; the content then uses the full width.
+- `background`: background image (local file or URL downloaded once and cached), with `blur`
+  and `dim` options.
+- Service groups now fill the whole row instead of leaving empty columns on wide pages.
+
 ## 0.1.1
 
 ### Never crashes on config mistakes
